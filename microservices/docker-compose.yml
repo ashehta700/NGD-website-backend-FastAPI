@@ -1,0 +1,102 @@
+services:
+  gateway:
+    build: ./gateway
+    ports:
+      - "8080:80"
+    depends_on:
+      - auth
+      - products
+      - survey
+      - content
+      - projects
+      - stats
+      - media
+    networks:
+      - msnet
+
+  auth:
+    build: ./services/auth
+    environment:
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SQLSERVER_HOST=${SQLSERVER_HOST}
+      - SQLSERVER_PORT=${SQLSERVER_PORT}
+      - SQLSERVER_USER=${SQLSERVER_USER}
+      - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
+      - SQLSERVER_DB=${SQLSERVER_DB}
+    networks:
+      - msnet
+
+  products:
+    build: ./services/products
+    environment:
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SQLSERVER_HOST=${SQLSERVER_HOST}
+      - SQLSERVER_PORT=${SQLSERVER_PORT}
+      - SQLSERVER_USER=${SQLSERVER_USER}
+      - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
+      - SQLSERVER_DB=${SQLSERVER_DB}
+    volumes:
+      - ../app/static:/app/static
+    networks:
+      - msnet
+
+  survey:
+    build: ./services/survey
+    environment:
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SQLSERVER_HOST=${SQLSERVER_HOST}
+      - SQLSERVER_PORT=${SQLSERVER_PORT}
+      - SQLSERVER_USER=${SQLSERVER_USER}
+      - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
+      - SQLSERVER_DB=${SQLSERVER_DB}
+    networks:
+      - msnet
+
+  content:
+    build: ./services/content
+    environment:
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SQLSERVER_HOST=${SQLSERVER_HOST}
+      - SQLSERVER_PORT=${SQLSERVER_PORT}
+      - SQLSERVER_USER=${SQLSERVER_USER}
+      - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
+      - SQLSERVER_DB=${SQLSERVER_DB}
+    networks:
+      - msnet
+
+  projects:
+    build: ./services/projects
+    environment:
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SQLSERVER_HOST=${SQLSERVER_HOST}
+      - SQLSERVER_PORT=${SQLSERVER_PORT}
+      - SQLSERVER_USER=${SQLSERVER_USER}
+      - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
+      - SQLSERVER_DB=${SQLSERVER_DB}
+    networks:
+      - msnet
+
+  stats:
+    build: ./services/stats
+    environment:
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SQLSERVER_HOST=${SQLSERVER_HOST}
+      - SQLSERVER_PORT=${SQLSERVER_PORT}
+      - SQLSERVER_USER=${SQLSERVER_USER}
+      - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
+      - SQLSERVER_DB=${SQLSERVER_DB}
+    networks:
+      - msnet
+
+  media:
+    build: ./services/media
+    volumes:
+      - ../app/static:/app/static
+    networks:
+      - msnet
+
+networks:
+  msnet:
+    driver: bridge
+
+

@@ -1,0 +1,10 @@
+cleaned_style.css
+__pycache__/
+*.pyc
+app/.env
+.env
+api_files/
+PROJECT_STRUCTURE_MAP.md
+test.py
+microservices/
+admin_reply_attachments/
