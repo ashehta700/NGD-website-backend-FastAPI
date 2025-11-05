@@ -3,12 +3,15 @@ name: CI-CD Pipeline
 on:
   push:
     branches:
-      - master  # runs when you push to main branch
+      - master
   pull_request:
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # ✅ allow pushing to GHCR
 
     steps:
       - name: 🧹 Checkout repo
