@@ -3,7 +3,7 @@ name: CI-CD Pipeline
 on:
   push:
     branches:
-      - main  # runs when you push to main branch
+      - master  # runs when you push to main branch
   pull_request:
 
 jobs:
