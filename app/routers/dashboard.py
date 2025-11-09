@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from app.database import get_db
 from fastapi import APIRouter
+from fastapi_cache.decorator import cache
 
 
 router = APIRouter(prefix="/dashboard", tags=["DashBoard"])
@@ -53,7 +54,7 @@ def get_countries(db: Session = Depends(get_db)):
 
 @router.get("/filters")
 def get_filters(db: Session = Depends(get_db)):
-    """Get available filter options"""
+    """Get available filter options including dataset names"""
     org_types = (
         db.query(DownloadRequest.OrgType)
         .distinct()
@@ -68,10 +69,20 @@ def get_filters(db: Session = Depends(get_db)):
         .order_by(DownloadRequest.CountryName)
         .all()
     )
+    datasets = (
+        db.query(DownloadRequest.DatasetName)
+        .distinct()
+        .filter(DownloadRequest.DatasetName.isnot(None))
+        .order_by(DownloadRequest.DatasetName)
+        .all()
+    )
+
     return {
         "org_types": [o[0] for o in org_types if o[0]],
         "countries": [c[0] for c in countries if c[0]],
+        "datasets": [d[0] for d in datasets if d[0]],
     }
+
 
 @router.get("/data/visitors")
 def get_visitors_data(
@@ -156,69 +167,70 @@ def get_visitors_data(
         }
     }
 
+
+
+
+
+
 @router.get("/data/users")
+@cache(expire=3600)  # cache for 1 hour
 def get_users_data(
     country: Optional[str] = None,
     orgtype: Optional[str] = None,
+    dataset: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Fetch user download request data with extended statistics"""
-    sql = """
-        SELECT 
-            itemid,
-            ReqNo,
-            OrgType,
-            CountryName,
-            requestdate,
-            Latitude,
-            Longitude,
-            DatasetName,
-            geom.STAsText() AS WKT
-        FROM dbo.VIEW_DOWNLOAD_REQUESTS
-        WHERE 1=1
-    """
-    
-    filters = []
-    if country:
-        filters.append(f"CountryName = '{country}'")
-    if orgtype:
-        filters.append(f"OrgType = '{orgtype}'")
-    if start_date:
-        filters.append(f"CAST(requestdate AS DATE) >= '{start_date}'")
-    if end_date:
-        filters.append(f"CAST(requestdate AS DATE) <= '{end_date}'")
-    
-    if filters:
-        sql += " AND " + " AND ".join(filters)
-    
-    result = db.execute(text(sql))
-    users = []
-    
-    for row in result:
-        users.append({
-            "lat": row.Latitude,
-            "lon": row.Longitude,
-            "label": f"{row.OrgType} - {row.DatasetName}",
-            "time": row.requestdate.isoformat() if row.requestdate else None,
-            "geom": row.WKT,
-            "orgtype": row.OrgType,
-            "country": row.CountryName,
-            "dataset": row.DatasetName,
-            "itemid": row.itemid,
-            "reqno": row.ReqNo
-        })
-    
-    # Extended statistics
-    by_country = {}
-    by_orgtype = {}
-    by_dataset = {}
-    total_items = 0
-    total_requests_set = set()  # Unique ReqNo
-    time_series = []
+    """Fast optimized user download data endpoint with caching"""
 
-    stats_sql = """
+    filters = ["1=1"]
+    params = {}
+
+    if country:
+        filters.append("CountryName = :country")
+        params["country"] = country
+    if orgtype:
+        filters.append("OrgType = :orgtype")
+        params["orgtype"] = orgtype
+    if dataset:
+        filters.append("DatasetName = :dataset")
+        params["dataset"] = dataset
+    if start_date:
+        filters.append("CAST(requestdate AS DATE) >= :start_date")
+        params["start_date"] = start_date
+    if end_date:
+        filters.append("CAST(requestdate AS DATE) <= :end_date")
+        params["end_date"] = end_date
+
+    where_clause = " AND ".join(filters)
+
+    sql = text(f"""
+        SELECT 
+            itemid, ReqNo, OrgType, CountryName, DatasetName,
+            requestdate, Latitude, Longitude, geom.STAsText() AS WKT
+        FROM dbo.VIEW_DOWNLOAD_REQUESTS
+        WHERE {where_clause}
+    """)
+    result = db.execute(sql, params).fetchall()
+
+    users = [
+        {
+            "lat": r.Latitude,
+            "lon": r.Longitude,
+            "label": f"{r.OrgType or ''} - {r.DatasetName or ''}",
+            "time": r.requestdate.isoformat() if r.requestdate else None,
+            "geom": r.WKT,
+            "orgtype": r.OrgType,
+            "country": r.CountryName,
+            "dataset": r.DatasetName,
+            "itemid": r.itemid,
+            "reqno": r.ReqNo
+        }
+        for r in result
+    ]
+
+    stats_sql = text(f"""
         SELECT 
             CountryName,
             OrgType,
@@ -227,60 +239,64 @@ def get_users_data(
             COUNT(DISTINCT ReqNo) AS total_requests,
             CAST(requestdate AS DATE) AS request_date
         FROM dbo.VIEW_DOWNLOAD_REQUESTS
-        WHERE 1=1
-    """
-
-    if filters:
-        stats_sql += " AND " + " AND ".join(filters)
-    
-    stats_sql += """
+        WHERE {where_clause}
         GROUP BY CountryName, OrgType, DatasetName, CAST(requestdate AS DATE)
         ORDER BY request_date
-    """
+    """)
 
-    stats_result = db.execute(text(stats_sql))
-    
-    for row in stats_result:
-        total_items += row.total_items
-        by_country[row.CountryName] = by_country.get(row.CountryName, 0) + row.total_items
-        by_orgtype[row.OrgType] = by_orgtype.get(row.OrgType, 0) + row.total_items
-        by_dataset[row.DatasetName] = by_dataset.get(row.DatasetName, 0) + row.total_items
-        total_requests_set.add(row.total_requests)
+    stats_result = db.execute(stats_sql, params).fetchall()
+
+    by_country, by_orgtype, by_dataset = {}, {}, {}
+    total_items = 0
+    total_requests = 0
+    time_series = []
+
+    for r in stats_result:
+        total_items += r.total_items
+        total_requests += r.total_requests
+        by_country[r.CountryName] = by_country.get(r.CountryName, 0) + r.total_items
+        by_orgtype[r.OrgType] = by_orgtype.get(r.OrgType, 0) + r.total_items
+        by_dataset[r.DatasetName] = by_dataset.get(r.DatasetName, 0) + r.total_items
+
         time_series.append({
-            "date": row.request_date.isoformat() if row.request_date else None,
-            "items": row.total_items,
-            "requests": row.total_requests,
-            "orgtype": row.OrgType,
-            "dataset": row.DatasetName
+            "date": r.request_date.isoformat() if r.request_date else None,
+            "items": r.total_items,
+            "requests": r.total_requests,
+            "orgtype": r.OrgType,
+            "dataset": r.DatasetName,
         })
 
     return {
         "markers": users,
         "statistics": {
             "total_items": total_items,
-            "total_requests": sum(total_requests_set),
+            "total_requests": total_requests,
             "by_country": by_country,
             "by_orgtype": by_orgtype,
             "by_dataset": by_dataset,
-            "time_series": sorted(time_series, key=lambda x: x["date"])
-        }
+            "time_series": time_series,
+        },
     }
 
 
-@router.get("/data/combined")
-def get_combined_data(
-    type: str = "visitor",
-    country: Optional[str] = None,
-    orgtype: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    """Combined endpoint for compatibility"""
-    if type == "visitor":
-        return get_visitors_data(country, start_date, end_date, db)
-    elif type == "user":
-        return get_users_data(country, orgtype, start_date, end_date, db)
-    else:
-        raise HTTPException(status_code=400, detail="Invalid type")
+
+
+
+# @router.get("/data/combined")
+# def get_combined_data(
+#     type: str = "visitor",
+#     country: Optional[str] = None,
+#     orgtype: Optional[str] = None,
+#     dataset: Optional[str] = None,
+#     start_date: Optional[str] = None,
+#     end_date: Optional[str] = None,
+#     db: Session = Depends(get_db),
+# ):
+#     """Combined endpoint for dashboard compatibility"""
+#     if type == "visitor":
+#         return get_visitors_data(country, start_date, end_date, db)
+#     elif type == "user":
+#         return get_users_data(country, orgtype, dataset, start_date, end_date, db)
+#     else:
+#         raise HTTPException(status_code=400, detail="Invalid type")
 

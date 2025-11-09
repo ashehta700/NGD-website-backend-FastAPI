@@ -7,9 +7,22 @@ from fastapi.responses import JSONResponse
 from app.utils.response import error_response
 from fastapi.middleware.cors import CORSMiddleware
 import os
+# for caching on memory
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
 
+
+    
 app = FastAPI()
 
+
+
+# for cahcing on memory
+@app.on_event("startup")
+async def on_startup():
+    FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
+    
+    
 # Determine absolute path to /app/static
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
