@@ -31,7 +31,7 @@ def build_image_url(request: Request, image_path: Optional[str]) -> Optional[str
         
     print(image_path)
     base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}{quote(image_path)}"
+    return f"{base_url}/{quote(image_path)}"
 
 # Dependency to get the database session
 def get_db():

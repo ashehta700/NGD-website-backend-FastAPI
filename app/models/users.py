@@ -19,7 +19,7 @@ class User(Base):
     Department = Column(UnicodeText)
     JobTitle = Column(Unicode(100))
     CityID = Column(Integer, ForeignKey("Website.Cities.CityID"))
-    CountryID = Column(Integer, ForeignKey("Website.Countries.CountryID"))
+    CountryID = Column(Integer, ForeignKey("dbo.COUNTRIES_LIST.OBJECTID"))
     PhoneNumber = Column(String(50), unique=True, index=True)
     Email = Column(String(150), unique=True, index=True, nullable=False)
     PasswordHash = Column(String(255), nullable=False)

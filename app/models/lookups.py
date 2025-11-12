@@ -1,8 +1,13 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime ,LargeBinary, Unicode, UnicodeText, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime ,LargeBinary, Unicode, UnicodeText, Boolean, Float
 from sqlalchemy.orm import relationship
 from app.database import Base
 from datetime import datetime
 from geoalchemy2 import Geometry
+
+
+
+
+
 
 
 
@@ -33,20 +38,34 @@ class OrganizationType(Base):
     UpdatedByUserID = Column(Integer, ForeignKey("Website.Users.UserID"))
 
 
-class Country(Base):
-    __tablename__ = "Countries"
-    __table_args__ = {"schema": "Website"}
+# class Country(Base):
+#     __tablename__ = "Countries"
+#     __table_args__ = {"schema": "Website"}
 
-    CountryID = Column(Integer, primary_key=True)
-    NameEn = Column(String(100), nullable=False)
-    NameAr = Column(Unicode(255), nullable=False)
-    IsoCode2 = Column(String(2))
-    IsoCode3 = Column(String(3))
-    # Geom = Column(LargeBinary)  
-    CreatedAt = Column(DateTime, default=datetime.utcnow)
-    CreatedByUserID = Column(Integer, ForeignKey("Website.Users.UserID"))
-    UpdatedAt = Column(DateTime)
-    UpdatedByUserID = Column(Integer, ForeignKey("Website.Users.UserID"))
+#     CountryID = Column(Integer, primary_key=True)
+#     NameEn = Column(String(100), nullable=False)
+#     NameAr = Column(Unicode(255), nullable=False)
+#     IsoCode2 = Column(String(2))
+#     IsoCode3 = Column(String(3))
+#     # Geom = Column(LargeBinary)  
+#     CreatedAt = Column(DateTime, default=datetime.utcnow)
+#     CreatedByUserID = Column(Integer, ForeignKey("Website.Users.UserID"))
+#     UpdatedAt = Column(DateTime)
+#     UpdatedByUserID = Column(Integer, ForeignKey("Website.Users.UserID"))
+
+# -------------------------
+# Countries Table
+# -------------------------
+class Country(Base):
+    __tablename__ = "COUNTRIES_LIST"
+    __table_args__ = {"schema": "dbo"}
+
+    OBJECTID = Column(Integer, primary_key=True, index=True)
+    CountryCode = Column(String)
+    CountryName = Column(String)
+    Latitude = Column(Float)
+    Longitude = Column(Float)
+    Geom = Column(String) 
 
 
 class City(Base):
@@ -56,7 +75,7 @@ class City(Base):
     CityID = Column(Integer, primary_key=True)
     NameEn = Column(String(100), nullable=False)
     NameAr = Column(Unicode(255), nullable=False)
-    CountryID = Column(Integer, ForeignKey("Website.Countries.CountryID"), nullable=False)
+    CountryID = Column(Integer, ForeignKey("dbo.COUNTRIES_LIST.OBJECTID"), nullable=False)
     # Geom = Column(LargeBinary)  
     CreatedAt = Column(DateTime, default=datetime.utcnow)
     CreatedByUserID = Column(Integer, ForeignKey("Website.Users.UserID"))

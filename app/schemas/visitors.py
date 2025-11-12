@@ -6,3 +6,6 @@ class VisitorCreate(BaseModel):
     X: Optional[float] = None
     Y: Optional[float] = None
     SessionID: Optional[str] = None
+    CountryID: Optional[int] = None
+    IPAddress: Optional[str] = None
+    

@@ -34,7 +34,12 @@ def get_registration_lookups(db: Session = Depends(get_db)):
         roles = db.query(Role).filter(Role.RoleID != 1)
         UserTitles = db.query(UserTitle).all()
         OrganizationTypes = db.query(OrganizationType).all()
-        Countries = db.query(Country).all()
+        # Exclude Geom column (geometry type) which pyodbc doesn't support
+        Countries = db.query(
+            Country.OBJECTID.label("id"),
+            Country.CountryCode.label("code"),
+            Country.CountryName.label("name")
+        ).all()
         Cities = db.query(City).all()
 
         roles_data = [
@@ -45,7 +50,8 @@ def get_registration_lookups(db: Session = Depends(get_db)):
         # You can add other lookup sets later, e.g.:
         titles =  [{"id": title.Id, "title": title.Title} for title in UserTitles]
         organizations =  [{"id": org.OrganizationTypeID, "NameEn": org.NameEn,"NameAr":org.NameAr} for org in OrganizationTypes]
-        countries = [{"id": country.CountryID, "NameEn": country.NameEn,"NameAr":country.NameAr} for country in Countries]
+        # Access labeled columns by attribute name
+        countries = [{"id": country.id, "NameEn": country.name, "CountryCode": country.code} for country in Countries]
         cities = [{"id": city.CityID, "NameEn": city.NameEn,"NameAr":city.NameAr} for city in Cities]
         # departments = [{"id": 1, "name": "IT"}, {"id": 2, "name": "HR"}]
 

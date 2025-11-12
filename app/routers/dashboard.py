@@ -1,302 +1,494 @@
-from fastapi import FastAPI, Depends, HTTPException
+# app/routers/dashboard.py
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
-from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func,and_, extract ,literal_column ,text
 from datetime import datetime
-from app.models.dashboard import Visitor, Country, DownloadRequest
-from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 from app.database import get_db
-from fastapi import APIRouter
-from fastapi_cache.decorator import cache
+from app.models.visitors import Visitor
+from app.models.users import User
+from app.models.lookups import Country, OrganizationType
+from app.models.dashboard import DownloadRequest, DownloadItem
+from app.utils.response import success_response
 
 
-router = APIRouter(prefix="/dashboard", tags=["DashBoard"])
+router = APIRouter(prefix="/dashboard", tags=["Visitors Dashboard"])
 
-# Pydantic Models
-class StatisticsResponse(BaseModel):
-    total_count: int
-    by_country: dict
-    by_category: dict
-    time_series: List[dict]
-
-class DashboardDataResponse(BaseModel):
-    markers: List[dict]
-    statistics: dict
-    total: int
+# ---------------------------------------------------------
+# 0 Visitors filter Options
+# ---------------------------------------------------------
 
 
-@router.get("/countries")
-def get_countries(db: Session = Depends(get_db)):
-    """Fetch all countries with boundaries"""
-    sql = text("""
-        SELECT  
-            CountryName,
-            Latitude,
-            Longitude,
-            CASE 
-                WHEN COLUMNPROPERTY(OBJECT_ID('Website.COUNTRIES_LIST'), 'geom', 'AllowsNull') IS NOT NULL
-                THEN geom.STAsText()
-                ELSE NULL
-            END AS WKT
-        FROM dbo.COUNTRIES_LIST
-    """)
-    result = db.execute(sql)
-    countries = []
-    for row in result:
-        countries.append({
-            "name": row.CountryName,
-            "lat": row.Latitude,
-            "lon": row.Longitude,
-            "geom": row.WKT
-        })
-    return countries
+@router.get("/visitors/filter-options")
+def get_visitor_filter_options(db: Session = Depends(get_db)):
+    """
+    Returns all countries that have visitor data.
+    Used to populate filters in the dashboard UI.
+    """
+    countries = (
+        db.query(
+            Country.CountryCode.label("country_code"),
+            Country.OBJECTID.label("country_id"),
+            Country.CountryName.label("country_name"),
+            func.count(Visitor.VisitorID).label("count")
+        )
+        .join(Country, Visitor.CountryID == Country.OBJECTID)
+        .group_by(Country.CountryCode, Country.CountryName,Country.OBJECTID)
+        .order_by(Country.CountryName)
+        .all()
+    )
 
-@router.get("/filters")
-def get_filters(db: Session = Depends(get_db)):
-    """Get available filter options including dataset names"""
-    org_types = (
+    data = {
+        "countries": [
+            {
+                "CountryCode": c.country_code,
+                "Country_id": c.country_id,
+                "CountryName": c.country_name,
+                "VisitorCount": c.count
+            }
+            for c in countries
+        ]
+    }
+
+    return success_response("Visitor filter options retrieved successfully", data)
+
+
+
+# ---------------------------------------------------------
+# 1️⃣ Visitors Summary Endpoint
+# ---------------------------------------------------------
+@router.get("/visitors/summary")
+def visitors_summary(db: Session = Depends(get_db)):
+    """
+    Returns total visitors, per-month counts, and per-country counts.
+    """
+
+    year_expr = func.year(Visitor.VisitAt)
+    month_expr = func.month(Visitor.VisitAt)
+
+    # --- Visitors per month ---
+    per_month = (
+        db.query(
+            year_expr.label("year"),
+            month_expr.label("month"),
+            func.count(Visitor.VisitorID).label("count"),
+        )
+        .group_by(year_expr, month_expr)
+        .order_by(year_expr, month_expr)
+        .all()
+    )
+
+    # --- Visitors per country ---
+    per_country = (
+        db.query(
+            Country.CountryCode.label("country_code"),
+            Country.CountryName.label("country_name"),
+            func.count(Visitor.VisitorID).label("count"),
+        )
+        .join(Country, Visitor.CountryID == Country.OBJECTID)
+        .group_by(Country.CountryCode, Country.CountryName)
+        .order_by(func.count(Visitor.VisitorID).desc())
+        .all()
+    )
+
+    # --- Total visitors ---
+    total_visitors = db.query(func.count(Visitor.VisitorID)).scalar()
+
+    data = {
+        "total": total_visitors,
+        "per_month": [
+            {"year": r.year, "month": r.month, "count": r.count} for r in per_month
+        ],
+        "per_country": [
+            {
+                "country_code": r.country_code,
+                "country_name": r.country_name,
+                "count": r.count,
+            }
+            for r in per_country
+        ],
+    }
+
+    return success_response("Visitors summary retrieved successfully", data)
+
+
+@router.get("/visitors/filter")
+def visitors_filter(
+    start_date: Optional[str] = Query(None, description="Format: YYYY-MM"),
+    end_date: Optional[str] = Query(None, description="Format: YYYY-MM"),
+    country_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Filters visitors by month-based date range and/or country.
+    Returns:
+    - Total visitors
+    - Per-country counts
+    - Time series per month for filtered countries
+    """
+
+    # --- Prepare date filters ---
+    filters = []
+    if start_date:
+        try:
+            start = datetime.strptime(start_date, "%Y-%m")
+            filters.append((extract("year", Visitor.VisitAt) * 100 + extract("month", Visitor.VisitAt)) 
+                           >= start.year * 100 + start.month)
+        except ValueError:
+            return {"error": "Invalid start_date format. Use YYYY-MM"}
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m")
+            filters.append((extract("year", Visitor.VisitAt) * 100 + extract("month", Visitor.VisitAt)) 
+                           <= end.year * 100 + end.month)
+        except ValueError:
+            return {"error": "Invalid end_date format. Use YYYY-MM"}
+    if country_id:
+        filters.append(Visitor.CountryID == country_id)
+
+    # --- Aggregate total visitors per country ---
+    per_country_query = (
+        db.query(
+            Country.CountryCode.label("country_code"),
+            Country.CountryName.label("country_name"),
+            func.count(Visitor.VisitorID).label("count")
+        )
+        .join(Country, Visitor.CountryID == Country.OBJECTID)
+        .filter(*filters)
+        .group_by(Country.CountryCode, Country.CountryName)
+        .order_by(func.count(Visitor.VisitorID).desc())
+    )
+    per_country = per_country_query.all()
+    total_visitors = sum(r.count for r in per_country)
+
+    # --- Time series per month ---
+    year_expr_visitors = extract("year", Visitor.VisitAt).label("year")
+    month_expr_visitors = extract("month", Visitor.VisitAt).label("month")
+
+    time_series_query = (
+        db.query(
+            year_expr_visitors,
+            month_expr_visitors,
+            func.count(Visitor.VisitorID).label("count")
+        )
+        .filter(*filters)
+        .group_by(year_expr_visitors, month_expr_visitors)
+        .order_by(year_expr_visitors, month_expr_visitors)
+    )
+    time_series = time_series_query.all()
+
+    formatted_series = [
+        {"month": f"{int(r.year)}-{int(r.month):02d}", "count": r.count} for r in time_series
+    ]
+
+    data = {
+        "total": total_visitors,
+        "countries": [
+            {"country_code": r.country_code, "country_name": r.country_name, "count": r.count}
+            for r in per_country
+        ],
+        "time_series": formatted_series
+    }
+
+    return success_response("Visitors filtered successfully", data)
+
+
+
+
+
+#-------------------------------------------------------------------------------
+#--------------------------Users------------------------------------------------
+#-------------------------------------------------------------------------------
+
+
+
+# ----------------------------
+# 0 filters options for the users 
+# ----------------------------
+
+@router.get("/users/filter-options")
+def get_user_filter_options(db: Session = Depends(get_db)):
+    """
+    Returns available filter options for users/downloads dashboard:
+    - Countries with download requests
+    - Organization names from requests
+    - Dataset names from download items
+    """
+
+    # --- Countries that have requests ---
+    countries = (
+        db.query(
+            DownloadRequest.Country.label("country_code"),
+            Country.OBJECTID.label("country_id"),
+            Country.CountryName.label("country_name"),
+            func.count(DownloadRequest.ReqNo).label("count")
+        )
+        .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
+        .group_by(DownloadRequest.Country, Country.CountryName,Country.OBJECTID)
+        .order_by(Country.CountryName)
+        .all()
+    )
+
+    # --- Organization names (distinct, non-null) ---
+    OrgType = (
         db.query(DownloadRequest.OrgType)
-        .distinct()
         .filter(DownloadRequest.OrgType.isnot(None))
+        .filter(DownloadRequest.OrgType != "")
+        .distinct()
         .order_by(DownloadRequest.OrgType)
         .all()
     )
-    countries = (
-        db.query(DownloadRequest.CountryName)
+
+    # --- Dataset names (distinct, non-null) ---
+    dataset_names = (
+        db.query(DownloadItem.DatasetName)
+        .filter(DownloadItem.DatasetName.isnot(None))
+        .filter(DownloadItem.DatasetName != "")
         .distinct()
-        .filter(DownloadRequest.CountryName.isnot(None))
-        .order_by(DownloadRequest.CountryName)
-        .all()
-    )
-    datasets = (
-        db.query(DownloadRequest.DatasetName)
-        .distinct()
-        .filter(DownloadRequest.DatasetName.isnot(None))
-        .order_by(DownloadRequest.DatasetName)
+        .order_by(DownloadItem.DatasetName)
         .all()
     )
 
-    return {
-        "org_types": [o[0] for o in org_types if o[0]],
-        "countries": [c[0] for c in countries if c[0]],
-        "datasets": [d[0] for d in datasets if d[0]],
+    data = {
+        "countries": [
+            {
+                "CountryCode": c.country_code,
+                "Country_id": c.country_id,
+                "CountryName": c.country_name,
+                "RequestCount": c.count
+            }
+            for c in countries
+        ],
+        "organizations": [o.OrgType for o in OrgType],
+        "datasets": [d.DatasetName for d in dataset_names],
     }
 
+    return success_response("User/download filter options retrieved successfully", data)
 
-@router.get("/data/visitors")
-def get_visitors_data(
-    country: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    """Fetch visitor data with statistics"""
-    sql = """
-        SELECT 
-            VisitorID,
-            IPAddress,
-            Location,
-            X,
-            Y,
-            VisitAt,
-            -- CountryID,
-            geom.STAsText() AS WKT
-        FROM Website.Visitors
-        WHERE 1=1
+
+
+# ----------------------------
+# 3️⃣ Users & Downloads Summary Endpoint
+# ----------------------------
+@router.get("/users/summary")
+def users_summary(db: Session = Depends(get_db)):
     """
-    
-    if country:
-        sql += f" AND Location = '{country}'"
-    if start_date:
-        sql += f" AND CAST(VisitAt AS DATE) >= '{start_date}'"
-    if end_date:
-        sql += f" AND CAST(VisitAt AS DATE) <= '{end_date}'"
-    
-    result = db.execute(text(sql))
-    visitors = []
-    for row in result:
-        visitors.append({
-            "lat": row.Y,
-            "lon": row.X,
-            "label": f"Visitor {row.IPAddress}",
-            "time": row.VisitAt.isoformat() if row.VisitAt else None,
-            "geom": row.WKT
-        })
-    
-    # Get statistics
-    stats_sql = """
-        SELECT 
-            COUNT(*) as total,
-            Location,
-            CAST(VisitAt AS DATE) as visit_date
-        FROM Website.Visitors
-        WHERE 1=1
+    Returns total users, total download requests, download items,
+    and aggregated data per country, month, org type, and dataset.
     """
-    
-    if country:
-        stats_sql += f" AND Location = '{country}'"
-    if start_date:
-        stats_sql += f" AND CAST(VisitAt AS DATE) >= '{start_date}'"
-    if end_date:
-        stats_sql += f" AND CAST(VisitAt AS DATE) <= '{end_date}'"
-    
-    stats_sql += " GROUP BY Location, CAST(VisitAt AS DATE) ORDER BY visit_date"
-    
-    stats_result = db.execute(text(stats_sql))
-    
-    by_country = {}
-    time_series = []
-    total = 0
-    
-    for row in stats_result:
-        total += row.total
-        by_country[row.Location] = by_country.get(row.Location, 0) + row.total
-        time_series.append({
-            "date": row.visit_date.isoformat() if row.visit_date else None,
-            "count": row.total,
-            "country": row.Location
-        })
-    
-    return {
-        "markers": visitors,
-        "statistics": {
-            "total": total,
-            "by_country": by_country,
-            "time_series": sorted(time_series, key=lambda x: x["date"])
-        }
+
+    total_users = db.query(func.count(User.UserID)).scalar() or 0
+    total_requests = db.query(func.count(DownloadRequest.ReqNo)).scalar() or 0
+    total_download_items = db.query(func.count(DownloadItem.ID)).scalar() or 0
+
+    # Requests per country (include country name via join)
+    requests_per_country = (
+        db.query(
+            DownloadRequest.Country.label("country_code"),
+            Country.CountryName.label("country_name"),
+            func.count(DownloadRequest.ReqNo).label("count")
+        )
+        .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
+        .group_by(DownloadRequest.Country, Country.CountryName)
+        .all()
+    )
+
+    # Downloads per country (include country name via join)
+    downloads_per_country = (
+        db.query(
+            DownloadRequest.Country.label("country_code"),
+            Country.CountryName.label("country_name"),
+            func.count(DownloadItem.ID).label("count")
+        )
+        .join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
+        .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
+        .group_by(DownloadRequest.Country, Country.CountryName)
+        .all()
+    )
+
+    # Group by YEAR and MONTH separately to avoid FORMAT()/DATEPART issues
+    year_expr = func.year(DownloadRequest.Date).label("year")
+    month_expr = func.month(DownloadRequest.Date).label("month")
+
+    # Requests per month
+    requests_per_month = (
+        db.query(year_expr, month_expr, func.count(DownloadRequest.ReqNo).label("count"))
+        .group_by(year_expr, month_expr)
+        .order_by(year_expr, month_expr)
+        .all()
+    )
+
+    # Downloads per month
+    downloads_per_month = (
+        db.query(year_expr, month_expr, func.count(DownloadItem.ID).label("count"))
+        .join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
+        .group_by(year_expr, month_expr)
+        .order_by(year_expr, month_expr)
+        .all()
+    )
+
+    # Downloads per organization type
+    downloads_per_orgtype = (
+        db.query(
+            DownloadRequest.OrgType.label("orgtype"),
+            func.count(DownloadItem.ID).label("count")
+        )
+        .join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
+        .group_by(DownloadRequest.OrgType)
+        .all()
+    )
+
+    # Downloads per dataset
+    downloads_per_dataset = (
+        db.query(
+            DownloadItem.DatasetName.label("dataset"),
+            func.count(DownloadItem.ID).label("count")
+        )
+        .group_by(DownloadItem.DatasetName)
+        .all()
+    )
+
+    # Helper to format year/month -> YYYY-MM
+    def format_year_month(year_val, month_val):
+        if year_val is None or month_val is None:
+            return None
+        return f"{int(year_val)}-{int(month_val):02d}"
+
+    data = {
+        "total_users": total_users,
+        "total_requests": total_requests,
+        "total_download_items": total_download_items,
+        "requests_per_country": [{"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count} for r in requests_per_country],
+        "downloads_per_country": [{"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count} for r in downloads_per_country],
+        "requests_per_month": [{"month": format_year_month(r.year, r.month), "count": r.count} for r in requests_per_month],
+        "downloads_per_month": [{"month": format_year_month(r.year, r.month), "count": r.count} for r in downloads_per_month],
+        "downloads_per_orgtype": [{"orgtype": r.orgtype, "count": r.count} for r in downloads_per_orgtype],
+        "downloads_per_dataset": [{"dataset": r.dataset, "count": r.count} for r in downloads_per_dataset],
     }
 
+    return success_response("Users & downloads summary retrieved successfully", data)
 
 
-
-
-
-@router.get("/data/users")
-@cache(expire=3600)  # cache for 1 hour
-def get_users_data(
-    country: Optional[str] = None,
-    orgtype: Optional[str] = None,
-    dataset: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+# ----------------------------
+# 2️⃣ Users & Downloads Filter Endpoint
+# ----------------------------
+@router.get("/users/filter")
+def users_filter(
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    country: Optional[str] = Query(None),
+    orgtype: Optional[str] = Query(None),
+    dataset_name: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    """Fast optimized user download data endpoint with caching"""
+    """
+    Filters users' download requests by date, country, org type, and dataset.
+    Returns aggregated counts per country, month, org type, and dataset.
+    """
 
-    filters = ["1=1"]
-    params = {}
+    # Base queries
+    query_requests = db.query(DownloadRequest)
+    query_downloads = db.query(DownloadRequest).join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
 
+    # Apply filters
+    if start_date:
+        query_requests = query_requests.filter(DownloadRequest.Date >= start_date)
+        query_downloads = query_downloads.filter(DownloadRequest.Date >= start_date)
+    if end_date:
+        query_requests = query_requests.filter(DownloadRequest.Date <= end_date)
+        query_downloads = query_downloads.filter(DownloadRequest.Date <= end_date)
     if country:
-        filters.append("CountryName = :country")
-        params["country"] = country
+        query_requests = query_requests.filter(DownloadRequest.Country == country)
+        query_downloads = query_downloads.filter(DownloadRequest.Country == country)
     if orgtype:
-        filters.append("OrgType = :orgtype")
-        params["orgtype"] = orgtype
-    if dataset:
-        filters.append("DatasetName = :dataset")
-        params["dataset"] = dataset
-    if start_date:
-        filters.append("CAST(requestdate AS DATE) >= :start_date")
-        params["start_date"] = start_date
-    if end_date:
-        filters.append("CAST(requestdate AS DATE) <= :end_date")
-        params["end_date"] = end_date
+        query_downloads = query_downloads.filter(DownloadRequest.OrgType == orgtype)
+    if dataset_name:
+        query_downloads = query_downloads.filter(DownloadItem.DatasetName == dataset_name)
 
-    where_clause = " AND ".join(filters)
+    # Totals
+    total_requests = query_requests.count()
+    total_download_items = query_downloads.count()
 
-    sql = text(f"""
-        SELECT 
-            itemid, ReqNo, OrgType, CountryName, DatasetName,
-            requestdate, Latitude, Longitude, geom.STAsText() AS WKT
-        FROM dbo.VIEW_DOWNLOAD_REQUESTS
-        WHERE {where_clause}
-    """)
-    result = db.execute(sql, params).fetchall()
+    # Aggregations
+    requests_per_country = (
+        query_requests
+        .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
+        .with_entities(
+            DownloadRequest.Country.label("country_code"),
+            Country.CountryName.label("country_name"),
+            func.count(DownloadRequest.ReqNo).label("count")
+        )
+        .group_by(DownloadRequest.Country, Country.CountryName)
+        .order_by(func.count(DownloadRequest.ReqNo).desc())
+        .all()
+    )
 
-    users = [
-        {
-            "lat": r.Latitude,
-            "lon": r.Longitude,
-            "label": f"{r.OrgType or ''} - {r.DatasetName or ''}",
-            "time": r.requestdate.isoformat() if r.requestdate else None,
-            "geom": r.WKT,
-            "orgtype": r.OrgType,
-            "country": r.CountryName,
-            "dataset": r.DatasetName,
-            "itemid": r.itemid,
-            "reqno": r.ReqNo
-        }
-        for r in result
-    ]
+    downloads_per_country = (
+        query_downloads
+        .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
+        .with_entities(
+            DownloadRequest.Country.label("country_code"),
+            Country.CountryName.label("country_name"),
+            func.count(DownloadItem.ID).label("count")
+        )
+        .group_by(DownloadRequest.Country, Country.CountryName)
+        .order_by(func.count(DownloadItem.ID).desc())
+        .all()
+    )
 
-    stats_sql = text(f"""
-        SELECT 
-            CountryName,
-            OrgType,
-            DatasetName,
-            COUNT(itemid) AS total_items,
-            COUNT(DISTINCT ReqNo) AS total_requests,
-            CAST(requestdate AS DATE) AS request_date
-        FROM dbo.VIEW_DOWNLOAD_REQUESTS
-        WHERE {where_clause}
-        GROUP BY CountryName, OrgType, DatasetName, CAST(requestdate AS DATE)
-        ORDER BY request_date
-    """)
+    # Group by YEAR and MONTH separately to avoid DATEPART binding issues
+    year_expr_f = func.year(DownloadRequest.Date).label("year")
+    month_expr_f = func.month(DownloadRequest.Date).label("month")
 
-    stats_result = db.execute(stats_sql, params).fetchall()
+    requests_per_month = (
+        query_requests.with_entities(year_expr_f, month_expr_f, func.count(DownloadRequest.ReqNo))
+        .group_by(year_expr_f, month_expr_f)
+        .order_by(year_expr_f, month_expr_f)
+        .all()
+    )
 
-    by_country, by_orgtype, by_dataset = {}, {}, {}
-    total_items = 0
-    total_requests = 0
-    time_series = []
+    downloads_per_month = (
+        query_downloads.with_entities(year_expr_f, month_expr_f, func.count(DownloadItem.ID))
+        .group_by(year_expr_f, month_expr_f)
+        .order_by(year_expr_f, month_expr_f)
+        .all()
+    )
 
-    for r in stats_result:
-        total_items += r.total_items
-        total_requests += r.total_requests
-        by_country[r.CountryName] = by_country.get(r.CountryName, 0) + r.total_items
-        by_orgtype[r.OrgType] = by_orgtype.get(r.OrgType, 0) + r.total_items
-        by_dataset[r.DatasetName] = by_dataset.get(r.DatasetName, 0) + r.total_items
+    downloads_per_orgtype = (
+        query_downloads.with_entities(
+            DownloadRequest.OrgType,
+            func.count(DownloadItem.ID)
+        )
+        .group_by(DownloadRequest.OrgType)
+        .order_by(func.count(DownloadItem.ID).desc())
+        .all()
+    )
 
-        time_series.append({
-            "date": r.request_date.isoformat() if r.request_date else None,
-            "items": r.total_items,
-            "requests": r.total_requests,
-            "orgtype": r.OrgType,
-            "dataset": r.DatasetName,
-        })
+    downloads_per_dataset = (
+        query_downloads.with_entities(
+            DownloadItem.DatasetName,
+            func.count(DownloadItem.ID)
+        )
+        .group_by(DownloadItem.DatasetName)
+        .order_by(func.count(DownloadItem.ID).desc())
+        .all()
+    )
 
-    return {
-        "markers": users,
-        "statistics": {
-            "total_items": total_items,
-            "total_requests": total_requests,
-            "by_country": by_country,
-            "by_orgtype": by_orgtype,
-            "by_dataset": by_dataset,
-            "time_series": time_series,
-        },
+    # Helper to format year/month -> YYYY-MM
+    def format_year_month_f(year_val, month_val):
+        if year_val is None or month_val is None:
+            return None
+        return f"{int(year_val)}-{int(month_val):02d}"
+
+    data = {
+        "total_requests": total_requests,
+        "total_download_items": total_download_items,
+        "requests_per_country": [{"CountryCode": r[0], "CountryName": r[1], "count": r[2]} for r in requests_per_country],
+        "downloads_per_country": [{"CountryCode": r[0], "CountryName": r[1], "count": r[2]} for r in downloads_per_country],
+        "requests_per_month": [{"month": format_year_month_f(r[0], r[1]), "count": r[2]} for r in requests_per_month],
+        "downloads_per_month": [{"month": format_year_month_f(r[0], r[1]), "count": r[2]} for r in downloads_per_month],
+        "downloads_per_orgtype": [{"orgtype": r[0], "count": r[1]} for r in downloads_per_orgtype],
+        "downloads_per_dataset": [{"dataset": r[0], "count": r[1]} for r in downloads_per_dataset],
     }
 
-
-
-
-
-# @router.get("/data/combined")
-# def get_combined_data(
-#     type: str = "visitor",
-#     country: Optional[str] = None,
-#     orgtype: Optional[str] = None,
-#     dataset: Optional[str] = None,
-#     start_date: Optional[str] = None,
-#     end_date: Optional[str] = None,
-#     db: Session = Depends(get_db),
-# ):
-#     """Combined endpoint for dashboard compatibility"""
-#     if type == "visitor":
-#         return get_visitors_data(country, start_date, end_date, db)
-#     elif type == "user":
-#         return get_users_data(country, orgtype, dataset, start_date, end_date, db)
-#     else:
-#         raise HTTPException(status_code=400, detail="Invalid type")
-
+    return success_response("Filtered users & downloads data retrieved successfully", data)

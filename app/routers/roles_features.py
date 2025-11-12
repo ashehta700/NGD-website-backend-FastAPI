@@ -21,20 +21,21 @@ def create_app_feature(payload: AppFeatureCreate, db: Session = Depends(get_db))
     return success_response("App feature created successfully", {"AppFeatureID": feature.AppFeatureID})
 
 
-@router.get("/appfeatures")
+@router.get("/appfeatures" , dependencies=[Depends(require_admin)])
 def get_all_features(db: Session = Depends(get_db)):
     features = db.query(AppFeature).all()
-    data = [
-        {
+    data = []
+    for f in features:
+        role_ids = [ra.RoleID for ra in f.role_apps]  # get all roles linked to this feature
+        data.append({
             "AppFeatureID": f.AppFeatureID,
             "NameEn": f.NameEn,
             "NameAr": f.NameAr,
             "DescriptionEn": f.DescriptionEn,
             "DescriptionAr": f.DescriptionAr,
-            "Link": f.Link
-        }
-        for f in features
-    ]
+            "Link": f.Link,
+            "RoleIDs": role_ids,  # ✅ include related Role IDs
+        })
     return success_response("App features retrieved successfully", data)
 
 
@@ -72,7 +73,7 @@ def create_role(payload: RoleCreate, db: Session = Depends(get_db)):
     return success_response("Role created successfully", {"RoleID": role.RoleID})
 
 
-@router.get("/roles")
+@router.get("/roles", dependencies=[Depends(require_admin)])
 def get_all_roles(db: Session = Depends(get_db)):
     roles = db.query(Role).all()
     data = []
@@ -90,19 +91,48 @@ def get_all_roles(db: Session = Depends(get_db)):
 
 
 @router.post("/roles/{role_id}/assign_features", dependencies=[Depends(require_admin)])
-def assign_features_to_role(role_id: int, feature_ids: list[int], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def assign_features_to_role(
+    role_id: int,
+    feature_ids: list[int],
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     role = db.query(Role).filter(Role.RoleID == role_id).first()
     if not role:
         return error_response("Role not found", "NOT_FOUND")
 
-    # Clear old RoleApp relations and recreate them
-    db.query(RoleApp).filter(RoleApp.RoleID == role_id).delete()
+    # --- Get existing RoleApp links ---
+    existing_links = db.query(RoleApp).filter(RoleApp.RoleID == role_id).all()
+    existing_feature_ids = {link.AppFeatureID for link in existing_links}
 
-    for fid in feature_ids:
+    # --- Compute differences ---
+    new_feature_ids = set(feature_ids)
+    to_add = new_feature_ids - existing_feature_ids
+    to_remove = existing_feature_ids - new_feature_ids
+
+    # --- Add new RoleApp entries ---
+    for fid in to_add:
         db.add(RoleApp(RoleID=role_id, AppFeatureID=fid, CreatedByUserID=user.UserID))
 
+    # --- Remove RoleApp entries not included anymore ---
+    if to_remove:
+        db.query(RoleApp).filter(
+            RoleApp.RoleID == role_id,
+            RoleApp.AppFeatureID.in_(to_remove)
+        ).delete(synchronize_session=False)
+
     db.commit()
-    return success_response("Features assigned to role successfully", {"RoleID": role.RoleID, "AssignedFeatures": feature_ids})
+
+    return success_response(
+        "Features updated successfully",
+        {
+            "RoleID": role.RoleID,
+            "AddedFeatures": list(to_add),
+            "RemovedFeatures": list(to_remove),
+            "CurrentFeatures": list(new_feature_ids)
+        }
+    )
+
 
 
 @router.get("/roles/{role_id}")

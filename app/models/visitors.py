@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime
+# models/visitors.py
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from geoalchemy2 import Geometry
 from datetime import datetime
 from app.database import Base
@@ -9,7 +10,7 @@ class Visitor(Base):
 
     VisitorID = Column(Integer, primary_key=True, index=True)
     IPAddress = Column(String(50))
-    Location = Column(String(255))
+    CountryID = Column(Integer, ForeignKey("dbo.COUNTRIES_LIST.OBJECTID"), nullable=True)  # ← new
     X = Column(Float)
     Y = Column(Float)
     Geom = Column(Geometry(geometry_type='POINT', srid=4326))
