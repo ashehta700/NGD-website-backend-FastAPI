@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func,and_, extract ,literal_column ,text
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from app.database import get_db
 from app.models.visitors import Visitor
 from app.models.users import User
@@ -281,7 +281,23 @@ def users_summary(db: Session = Depends(get_db)):
     total_requests = db.query(func.count(DownloadRequest.ReqNo)).scalar() or 0
     total_download_items = db.query(func.count(DownloadItem.ID)).scalar() or 0
 
-    # Requests per country (include country name via join)
+    # ----------------------------------------
+    # Users per month
+    # ----------------------------------------
+    user_year_expr = func.year(User.CreatedAt).label("year")
+    user_month_expr = func.month(User.CreatedAt).label("month")
+
+    users_per_month = (
+        db.query(user_year_expr, user_month_expr, func.count(User.UserID).label("count"))
+        .group_by(user_year_expr, user_month_expr)
+        .order_by(user_year_expr, user_month_expr)
+        .all()
+    )
+    print(users_per_month)
+
+    # ----------------------------------------
+    # Requests per country
+    # ----------------------------------------
     requests_per_country = (
         db.query(
             DownloadRequest.Country.label("country_code"),
@@ -293,7 +309,9 @@ def users_summary(db: Session = Depends(get_db)):
         .all()
     )
 
-    # Downloads per country (include country name via join)
+    # ----------------------------------------
+    # Downloads per country
+    # ----------------------------------------
     downloads_per_country = (
         db.query(
             DownloadRequest.Country.label("country_code"),
@@ -306,28 +324,33 @@ def users_summary(db: Session = Depends(get_db)):
         .all()
     )
 
-    # Group by YEAR and MONTH separately to avoid FORMAT()/DATEPART issues
-    year_expr = func.year(DownloadRequest.Date).label("year")
-    month_expr = func.month(DownloadRequest.Date).label("month")
-
+    # ----------------------------------------
     # Requests per month
+    # ----------------------------------------
+    req_year_expr = func.year(DownloadRequest.Date).label("year")
+    req_month_expr = func.month(DownloadRequest.Date).label("month")
+
     requests_per_month = (
-        db.query(year_expr, month_expr, func.count(DownloadRequest.ReqNo).label("count"))
-        .group_by(year_expr, month_expr)
-        .order_by(year_expr, month_expr)
+        db.query(req_year_expr, req_month_expr, func.count(DownloadRequest.ReqNo).label("count"))
+        .group_by(req_year_expr, req_month_expr)
+        .order_by(req_year_expr, req_month_expr)
         .all()
     )
 
+    # ----------------------------------------
     # Downloads per month
+    # ----------------------------------------
     downloads_per_month = (
-        db.query(year_expr, month_expr, func.count(DownloadItem.ID).label("count"))
+        db.query(req_year_expr, req_month_expr, func.count(DownloadItem.ID).label("count"))
         .join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
-        .group_by(year_expr, month_expr)
-        .order_by(year_expr, month_expr)
+        .group_by(req_year_expr, req_month_expr)
+        .order_by(req_year_expr, req_month_expr)
         .all()
     )
 
-    # Downloads per organization type
+    # ----------------------------------------
+    # Downloads per org type
+    # ----------------------------------------
     downloads_per_orgtype = (
         db.query(
             DownloadRequest.OrgType.label("orgtype"),
@@ -338,7 +361,9 @@ def users_summary(db: Session = Depends(get_db)):
         .all()
     )
 
+    # ----------------------------------------
     # Downloads per dataset
+    # ----------------------------------------
     downloads_per_dataset = (
         db.query(
             DownloadItem.DatasetName.label("dataset"),
@@ -348,7 +373,7 @@ def users_summary(db: Session = Depends(get_db)):
         .all()
     )
 
-    # Helper to format year/month -> YYYY-MM
+    # Helper to format YYYY-MM
     def format_year_month(year_val, month_val):
         if year_val is None or month_val is None:
             return None
@@ -358,16 +383,38 @@ def users_summary(db: Session = Depends(get_db)):
         "total_users": total_users,
         "total_requests": total_requests,
         "total_download_items": total_download_items,
-        "requests_per_country": [{"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count} for r in requests_per_country],
-        "downloads_per_country": [{"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count} for r in downloads_per_country],
-        "requests_per_month": [{"month": format_year_month(r.year, r.month), "count": r.count} for r in requests_per_month],
-        "downloads_per_month": [{"month": format_year_month(r.year, r.month), "count": r.count} for r in downloads_per_month],
-        "downloads_per_orgtype": [{"orgtype": r.orgtype, "count": r.count} for r in downloads_per_orgtype],
-        "downloads_per_dataset": [{"dataset": r.dataset, "count": r.count} for r in downloads_per_dataset],
+
+        # ✅ NEW: Users per month
+        "users_per_month": [
+            {"month": format_year_month(r.year, r.month), "count": r.count}
+            for r in users_per_month
+        ],
+
+        "requests_per_country": [
+            {"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count}
+            for r in requests_per_country
+        ],
+        "downloads_per_country": [
+            {"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count}
+            for r in downloads_per_country
+        ],
+        "requests_per_month": [
+            {"month": format_year_month(r.year, r.month), "count": r.count}
+            for r in requests_per_month
+        ],
+        "downloads_per_month": [
+            {"month": format_year_month(r.year, r.month), "count": r.count}
+            for r in downloads_per_month
+        ],
+        "downloads_per_orgtype": [
+            {"orgtype": r.orgtype, "count": r.count} for r in downloads_per_orgtype
+        ],
+        "downloads_per_dataset": [
+            {"dataset": r.dataset, "count": r.count} for r in downloads_per_dataset
+        ],
     }
 
     return success_response("Users & downloads summary retrieved successfully", data)
-
 
 # ----------------------------
 # 2️⃣ Users & Downloads Filter Endpoint
@@ -377,13 +424,17 @@ def users_filter(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     country: Optional[str] = Query(None),
-    orgtype: Optional[str] = Query(None),
-    dataset_name: Optional[str] = Query(None),
+    orgtype: Optional[List[str]] = Query(None, description="Filter by one or more organization types"),
+    dataset_name: Optional[List[str]] = Query(None, description="Filter by one or more dataset names"),
     db: Session = Depends(get_db),
 ):
     """
     Filters users' download requests by date, country, org type, and dataset.
     Returns aggregated counts per country, month, org type, and dataset.
+    
+    orgtype and dataset_name can accept multiple values:
+    - Single: ?orgtype=Type1
+    - Multiple: ?orgtype=Type1&orgtype=Type2
     """
 
     # Base queries
@@ -401,9 +452,11 @@ def users_filter(
         query_requests = query_requests.filter(DownloadRequest.Country == country)
         query_downloads = query_downloads.filter(DownloadRequest.Country == country)
     if orgtype:
-        query_downloads = query_downloads.filter(DownloadRequest.OrgType == orgtype)
+        # Filter by one or more organization types
+        query_downloads = query_downloads.filter(DownloadRequest.OrgType.in_(orgtype))
     if dataset_name:
-        query_downloads = query_downloads.filter(DownloadItem.DatasetName == dataset_name)
+        # Filter by one or more dataset names
+        query_downloads = query_downloads.filter(DownloadItem.DatasetName.in_(dataset_name))
 
     # Totals
     total_requests = query_requests.count()

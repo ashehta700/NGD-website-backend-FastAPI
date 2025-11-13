@@ -36,7 +36,7 @@ class MetadataInfo(Base):
     description = Column(Text)
     descriptionAr = Column(UnicodeText)
     CreationDate = Column(Date)
-    URL = Column(String(500))
+    URL = Column(Unicode(500))
     WestBound = Column(Float)
     EastBound = Column(Float)
     NorthBound = Column(Float)
