@@ -1,0 +1,38 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files
+.env
+app/.env
+app/.env_copy
+
+
+# API static/uploads/temp files
+api_files/
+admin_reply_attachments/
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build / Distribution
+build/
+dist/
+*.egg-info/
+
+# Testing / temp files
+test.py
+PROJECT_STRUCTURE_MAP.md
+# app/readme.md
+
+# Frontend or temp styling
+cleaned_style.css
+
+# Docker / venv
+venv/
+.envrc
+docker-compose.override.yml
