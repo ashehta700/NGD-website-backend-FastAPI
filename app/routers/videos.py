@@ -69,7 +69,7 @@ def create_video(
             shutil.copyfileobj(image.file, buffer)
 
         # store only relative path in DB (without "static/")
-        image_path = f"videos/{filename}"
+        image_path = f"app/static/videos/{filename}"
     else:
         image_path = None
 
