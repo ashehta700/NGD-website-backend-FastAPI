@@ -10,22 +10,20 @@ from app.models.users import User
 from app.auth.jwt_bearer import JWTBearer
 from app.utils.response import success_response, error_response
 from app.utils.utils import get_current_user , require_admin
-from app.utils.paths import static_path
+from app.utils.paths import static_path, static_file_paths, normalize_static_subpath
 
 router = APIRouter(prefix="/videos", tags=["Videos"])
-
-# Upload directory
-VIDEO_UPLOAD_DIR = static_path("videos", ensure=True)
-
 
 # ---------- Helpers ----------
 
 
 def build_image_url(request: Request, image_path: Optional[str]) -> Optional[str]:
-    if not image_path:
+    relative_path = normalize_static_subpath(image_path) if image_path else ""
+    if not relative_path:
         return None
     base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}/static/{quote(image_path)}"
+    encoded = quote(relative_path, safe="/")
+    return f"{base_url}/static/{encoded}"
 
 
 # ---------- Public ----------
@@ -63,13 +61,10 @@ def create_video(
     image_path = None
     if image:
         filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{image.filename}"
-        save_path = os.path.join(VIDEO_UPLOAD_DIR, filename)  # e.g., static/videos/xxx.jpg
-        
+        save_path, image_path = static_file_paths(filename, "videos")
+
         with open(save_path, "wb") as buffer:
             shutil.copyfileobj(image.file, buffer)
-
-        # store only relative path in DB (without "static/")
-        image_path = f"app/static/videos/{filename}"
     else:
         image_path = None
 
@@ -128,18 +123,19 @@ def update_video(
     if image:
         # 1️⃣ Optional: delete old image if exists
         if db_video.ImagePath:
-            old_path = static_path(db_video.ImagePath)
-            if os.path.exists(old_path):
+            old_relative_path = normalize_static_subpath(db_video.ImagePath)
+            old_path = static_path(old_relative_path) if old_relative_path else None
+            if old_path and os.path.exists(old_path):
                 os.remove(old_path)
 
         # 2️⃣ Save new image
         filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{image.filename}"
-        save_path = os.path.join(VIDEO_UPLOAD_DIR, filename)
+        save_path, relative_path = static_file_paths(filename, "videos")
         with open(save_path, "wb") as buffer:
             shutil.copyfileobj(image.file, buffer)
 
         # 3️⃣ Update the database field
-        db_video.ImagePath = f"videos/{filename}"
+        db_video.ImagePath = relative_path
 
     # --- Update audit fields ---
     db_video.UpdatedAt = datetime.utcnow()

@@ -36,3 +36,24 @@ class DownloadItem(Base):
     AreaType = Column(String(50))
     Cost = Column(String(50))
     FileName = Column(String(50))
+
+
+class NGDModsBiblio(Base):
+    __tablename__ = "NGD_MODS_BIBLIO"
+    __table_args__ = {"schema": "dbo"}
+
+    MODS = Column(String(50), primary_key=True, nullable=False)
+    ReportID = Column(String(50), primary_key=True, nullable=False)
+
+
+class BibliographyDownloadRequest(Base):
+    __tablename__ = "BIBLIOGRAPHY_DOWNLOAD_REQUESTS"
+    __table_args__ = {"schema": "dbo"}
+
+    ReqNo = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    MODS = Column(String(255))
+    MODSEngName = Column(String(255))
+    Purpose = Column(String(255))
+    Date = Column(DateTime)
+    FileName = Column(String(255))
+    UserID = Column(String(255))

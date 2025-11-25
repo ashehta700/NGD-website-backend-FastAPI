@@ -1,19 +1,20 @@
 # app/routers/auth.py
 from fastapi import APIRouter, Depends, Request, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from passlib.hash import bcrypt
-from app.models.users import User
+from app.models.users import User, Domain
 from app.schemas.users import UserCreate, UserLogin
 from app.auth.jwt_handler import create_access_token
 from app.auth.jwt_bearer import ALGORITHM, SECRET_KEY
 from app.utils.response import success_response, error_response
 from app.database import get_db
-from app.utils.email import send_email
+from app.utils.email import send_email, send_domain_refused_email
 from app.auth.tokens import create_verification_token, verify_verification_token
 import jwt
 from app.models.lookups import  UserTitle, OrganizationType, Country, City
 from datetime import datetime
-from app.utils.utils import get_optional_user
+from app.utils.utils import get_optional_user, extract_email_domain
 from app.models.role_feature import Role
 import os
 from dotenv import load_dotenv
@@ -60,12 +61,22 @@ def get_registration_lookups(db: Session = Depends(get_db)):
         cities = [{"id": city.CityID, "NameEn": city.NameEn,"NameAr":city.NameAr} for city in Cities]
         # departments = [{"id": 1, "name": "IT"}, {"id": 2, "name": "HR"}]
 
+        domains = db.query(Domain).order_by(Domain.Type.asc(), Domain.Domain.asc()).all()
+
         lookups = {
             "roles": roles_data,
             "titles": titles,
             "Organizations": organizations,
             "countries": countries,
             "cities": cities,
+            "domains": [
+                {
+                    "id": domain.Id,
+                    "domain": domain.Domain,
+                    "type": domain.Type
+                }
+                for domain in domains
+            ],
             # "departments": departments,
         }
 
@@ -93,6 +104,23 @@ def register(
     # Hash password
     hashed_password = bcrypt.hash(user.Password)
 
+    email_domain = extract_email_domain(user.Email)
+    auto_approve = False
+    if email_domain:
+        domain_record = (
+            db.query(Domain)
+            .filter(func.lower(Domain.Domain) == email_domain)
+            .first()
+        )
+        if domain_record and domain_record.Type == "refused":
+            background_tasks.add_task(send_domain_refused_email, user.Email, email_domain)
+            return error_response(
+                "This email domain is not allowed. Please use your company email.",
+                "DOMAIN_REFUSED"
+            )
+        if domain_record and domain_record.Type == "accept":
+            auto_approve = True
+
     # Create new user object
     new_user = User(
         FirstName=user.FirstName,
@@ -110,9 +138,9 @@ def register(
         UserType=user.UserType,
         PasswordHash=hashed_password,
         RoleID=user.RoleID or 2,
-        IsApproved=False,
+        IsApproved=auto_approve,
         EmailVerified=False,
-        IsActive=False,
+        IsActive=auto_approve,
         CreatedAt=datetime.now(),
         CreatedByUserID=current_user.UserID if current_user else None,  # 👈 NEW LINE
     )
@@ -122,14 +150,22 @@ def register(
     db.refresh(new_user)
 
     # Generate email verification link
-    token = create_verification_token(user.Email)
+    token = create_verification_token(user.Email, expires_minutes=None)
     verify_url = f"{FRONTEND_BASE_URL}/auth/verify-email?token={token}"
 
     email_body = f"""
-    <h3>Hello {user.FirstName},</h3>
-    <p>Welcome to NGD! Please verify your email by clicking the link below:</p>
-    <a href="{verify_url}">Verify My Email</a>
-    <p>This link will expire in 1 hour.</p>
+    <div style="font-family:'Segoe UI',Arial,sans-serif;color:#1f2937;max-width:520px;margin:auto;">
+        <h2 style="color:#2563eb;margin-bottom:8px;">Welcome to NGD, {user.FirstName}!</h2>
+        <p>Thanks for registering. Please confirm your email so we can activate your account.</p>
+        <p style="margin:24px 0;">
+            <a href="{verify_url}" style="background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:6px;display:inline-block;">
+                Verify my email
+            </a>
+        </p>
+        <p style="font-size:13px;color:#6b7280;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="font-size:13px;color:#2563eb;word-break:break-all;">{verify_url}</p>
+        <p style="margin-top:32px;">Best regards,<br/>NGD Team</p>
+    </div>
     """
 
     # Send verification email in background
@@ -154,6 +190,9 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     if not user:
         return error_response("User not found", "USER_NOT_FOUND")
 
+    if user.EmailVerified:
+        return error_response("Email already verified", "EMAIL_ALREADY_VERIFIED")
+
     user.EmailVerified = True
     db.commit()
 
@@ -169,20 +208,33 @@ def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
     if not db_user or not bcrypt.verify(user.Password, db_user.PasswordHash):
         return error_response("Invalid email or password", "INVALID_CREDENTIALS")
 
-    # 2️⃣ Check if user is approved
-    if not getattr(db_user, "IsApproved", True):  # adjust field name if different
-        return error_response("Your account is not yet approved by the administrator", "ACCOUNT_NOT_APPROVED")
+    # 2️⃣ Check if email is verified (first priority)
+    if not db_user.EmailVerified:
+        return error_response(
+            "Please verify your email address before logging in. Check your inbox for the verification link.",
+            "EMAIL_NOT_VERIFIED"
+        )
 
-    # 3️⃣ Check if user is active
-    if not getattr(db_user, "IsActive", True):  # adjust field name if different
-        return error_response("Your account is deactivated. Please contact support.", "ACCOUNT_INACTIVE")
+    # 3️⃣ Check if user is approved by administrator
+    if not db_user.IsApproved:
+        return error_response(
+            "Your account is pending approval by an administrator. Please wait for approval or contact support.",
+            "ACCOUNT_NOT_APPROVED"
+        )
 
-    # 4️⃣ Build photo URL
+    # 4️⃣ Check if user account is active
+    if not db_user.IsActive:
+        return error_response(
+            "Your account has been deactivated. Please contact support to reactivate your account.",
+            "ACCOUNT_INACTIVE"
+        )
+
+    # 5️⃣ Build photo URL
     base_url = str(request.base_url).rstrip("/")
     photo_relative_path = db_user.PhotoPath or ""
     photo_url = f"{base_url}/{photo_relative_path.lstrip('/')}" if photo_relative_path else None
 
-    # 5️⃣ Create JWT token
+    # 6️⃣ Create JWT token
     token = create_access_token(
         data={
             "sub": db_user.Email,
@@ -194,7 +246,7 @@ def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
         }
     )
 
-    # 6️⃣ Return success response
+    # 7️⃣ Return success response
     return success_response("Login successful", {"access_token": token})
 
 
@@ -206,13 +258,21 @@ def forgot_password(request: Request, email: str, background_tasks: BackgroundTa
     if not user:
         return error_response("Email not found", "EMAIL_NOT_FOUND")
 
-    token = create_verification_token(email)
+    token = create_verification_token(email, expires_minutes=60)
     reset_url = f"{FRONTEND_BASE_URL}/auth/reset-password?token={token}"
     email_body = f"""
-    <h3>Password Reset Request</h3>
-    <p>Click below to reset your password:</p>
-    <a href="{reset_url}">Reset Password</a>
-    <p>This link will expire in 1 hour.</p>
+    <div style="font-family:'Segoe UI',Arial,sans-serif;color:#1f2937;max-width:520px;margin:auto;">
+        <h2 style="color:#2563eb;margin-bottom:8px;">Reset your NGD password</h2>
+        <p>We received a request to reset the password for your account. Click the button below to choose a new password.</p>
+        <p style="margin:24px 0;">
+            <a href="{reset_url}" style="background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:6px;display:inline-block;">
+                Reset password
+            </a>
+        </p>
+        <p style="font-size:13px;color:#6b7280;">If you didn't request this, you can safely ignore this email.</p>
+        <p style="font-size:13px;color:#6b7280;">Link (valid for 60 minutes): <span style="color:#2563eb;word-break:break-all;">{reset_url}</span></p>
+        <p style="margin-top:32px;">Best regards,<br/>NGD Team</p>
+    </div>
     """
     background_tasks.add_task(send_email, "Password Reset - NGD", email_body, email)
 

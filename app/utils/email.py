@@ -5,6 +5,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 import os
+from typing import Iterable, Optional
 from dotenv import load_dotenv
 from app.utils.paths import static_path
 
@@ -35,6 +36,41 @@ ADMIN_UPLOAD_DIR = static_path("requests", "reply", ensure=True)
 # -------------------------
 # Email Helper Functions
 # -------------------------
+def _render_email_html(
+    title: str,
+    paragraphs: Iterable[str],
+    button_text: Optional[str] = None,
+    button_url: Optional[str] = None,
+    footer: Optional[str] = "Best regards,<br/>NGD Team"
+) -> str:
+    paragraph_html = "".join(
+        f'<p style="margin:0 0 14px;line-height:1.6;">{p}</p>'
+        for p in paragraphs
+        if p
+    )
+    button_html = ""
+    if button_text and button_url:
+        button_html = f"""
+        <p style="margin:24px 0;">
+            <a href="{button_url}" style="background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 26px;border-radius:6px;display:inline-block;">
+                {button_text}
+            </a>
+        </p>
+        """
+    footer_html = ""
+    if footer:
+        footer_html = f'<p style="margin-top:24px;color:#6b7280;">{footer}</p>'
+
+    return f"""
+    <div style="font-family:'Segoe UI',Arial,sans-serif;color:#1f2937;max-width:520px;margin:auto;">
+        <h2 style="color:#2563eb;margin-bottom:16px;">{title}</h2>
+        {paragraph_html}
+        {button_html}
+        {footer_html}
+    </div>
+    """
+
+
 def _send_raw_email(msg, to_email: str):
     """Low-level helper for sending emails via SMTP."""
     if MAIL_SSL:
@@ -86,12 +122,15 @@ def send_email_with_attachment(subject: str, body: str, to_email: str, attachmen
 # -------------------------
 def send_request_email(request_number: str, category: str, user_email: str, first_name: str, background_tasks: BackgroundTasks):
     subject = f"NGD - Your {category} request has been received"
-    body = f"""
-    <p>Dear {first_name},</p>
-    <p>We have received your <strong>{category}</strong> request with number <strong>{request_number}</strong>.</p>
-    <p>Our team will review it and respond as soon as possible.</p>
-    <p>Thank you for your submission.</p>
-    """
+    body = _render_email_html(
+        title="We've received your request",
+        paragraphs=[
+            f"Dear {first_name},",
+            f"We have received your <strong>{category}</strong> request with number <strong>{request_number}</strong>.",
+            "Our team will review it and respond as soon as possible.",
+            "You can reply to this email if you have additional information to share."
+        ]
+    )
     background_tasks.add_task(send_email, subject, body, user_email)
 
     # also notify system admin
@@ -101,13 +140,30 @@ def send_request_email(request_number: str, category: str, user_email: str, firs
 
 def send_reply_email(request_number: str, user_email: str, reply_body: str, background_tasks: BackgroundTasks):
     subject = f"NGD - Response to your request {request_number}"
-    body = f"""
-    <p>Dear user,</p>
-    <p>We have responded to your request <strong>{request_number}</strong>:</p>
-    <p>{reply_body}</p>
-    <p>Thank you for using our system.</p>
-    """
+    body = _render_email_html(
+        title=f"Update on request {request_number}",
+        paragraphs=[
+            "Dear user,",
+            f"We have responded to your request <strong>{request_number}</strong>:",
+            f'<div style="background:#f3f4f6;padding:12px 16px;border-radius:6px;margin:12px 0;">{reply_body}</div>',
+            "If you have further questions, just reply to this email."
+        ]
+    )
     background_tasks.add_task(send_email, subject, body, user_email)
+
+
+def send_domain_refused_email(user_email: str, domain: str):
+    subject = "NGD - Please use a professional email"
+    body = _render_email_html(
+        title="We couldn't accept your registration email",
+        paragraphs=[
+            f"We noticed you tried to register using <strong>{domain}</strong>.",
+            "For security reasons, NGD accounts must use professional or company email domains.",
+            "Please sign up again using your organization email address so we can verify and approve your account."
+        ],
+        footer="Need help? Reply to this email and our team will assist you."
+    )
+    send_email(subject, body, user_email)
 
 
 

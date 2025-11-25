@@ -42,3 +42,12 @@ class User(Base):
     organization_type = relationship("lookups.OrganizationType", foreign_keys=[OrganizationTypeID])
     city = relationship("lookups.City", foreign_keys=[CityID])
     country = relationship("lookups.Country", foreign_keys=[CountryID])
+
+
+class Domain(Base):
+    __tablename__ = "Domains"
+    __table_args__ = {'schema': 'Website'}
+
+    Id = Column(Integer, primary_key=True, index=True)
+    Domain = Column(String(255), unique=True, nullable=False)
+    Type = Column(String(10), nullable=False, default="accept")  # accept | refused

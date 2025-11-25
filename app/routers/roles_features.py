@@ -90,46 +90,60 @@ def get_all_roles(db: Session = Depends(get_db)):
     return success_response("Roles retrieved successfully", data)
 
 
-@router.post("/roles/{role_id}/assign_features", dependencies=[Depends(require_admin)])
-def assign_features_to_role(
-    role_id: int,
-    feature_ids: list[int],
+class AssignFeatureToRolesPayload(BaseModel):
+    role_ids: List[int]
+
+
+
+@router.post("/roles/{app_feature_id}/assign_features", dependencies=[Depends(require_admin)])
+def assign_feature_to_roles(
+    app_feature_id: int,
+    payload: AssignFeatureToRolesPayload,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    role = db.query(Role).filter(Role.RoleID == role_id).first()
-    if not role:
-        return error_response("Role not found", "NOT_FOUND")
+    # --- Check if the feature exists ---
+    feature = db.query(AppFeature).filter(AppFeature.AppFeatureID == app_feature_id).first()
+    if not feature:
+        return error_response("App feature not found", "NOT_FOUND")
 
-    # --- Get existing RoleApp links ---
-    existing_links = db.query(RoleApp).filter(RoleApp.RoleID == role_id).all()
-    existing_feature_ids = {link.AppFeatureID for link in existing_links}
+    # --- Existing RoleApp links for this feature ---
+    existing_links = db.query(RoleApp).filter(RoleApp.AppFeatureID == app_feature_id).all()
+    existing_role_ids = {link.RoleID for link in existing_links}
 
     # --- Compute differences ---
-    new_feature_ids = set(feature_ids)
-    to_add = new_feature_ids - existing_feature_ids
-    to_remove = existing_feature_ids - new_feature_ids
+    new_role_ids = set(payload.role_ids)
+    to_add = new_role_ids - existing_role_ids
+    to_remove = existing_role_ids - new_role_ids
 
     # --- Add new RoleApp entries ---
-    for fid in to_add:
-        db.add(RoleApp(RoleID=role_id, AppFeatureID=fid, CreatedByUserID=user.UserID))
+    for rid in to_add:
+        db.add(RoleApp(
+            RoleID=rid,
+            AppFeatureID=app_feature_id,
+            CreatedByUserID=user.UserID
+        ))
 
-    # --- Remove RoleApp entries not included anymore ---
+    # --- Remove RoleApp entries not in the new list ---
     if to_remove:
         db.query(RoleApp).filter(
-            RoleApp.RoleID == role_id,
-            RoleApp.AppFeatureID.in_(to_remove)
+            RoleApp.AppFeatureID == app_feature_id,
+            RoleApp.RoleID.in_(to_remove)
         ).delete(synchronize_session=False)
 
     db.commit()
 
+    # --- Return the updated info ---
+    current_roles = db.query(RoleApp.RoleID).filter(RoleApp.AppFeatureID == app_feature_id).all()
+    current_roles = [r[0] for r in current_roles]
+
     return success_response(
-        "Features updated successfully",
+        "Feature roles updated successfully",
         {
-            "RoleID": role.RoleID,
-            "AddedFeatures": list(to_add),
-            "RemovedFeatures": list(to_remove),
-            "CurrentFeatures": list(new_feature_ids)
+            "AppFeatureID": app_feature_id,
+            "AddedRoles": list(to_add),
+            "RemovedRoles": list(to_remove),
+            "CurrentRoles": current_roles
         }
     )
 

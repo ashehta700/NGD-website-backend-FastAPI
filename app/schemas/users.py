@@ -76,4 +76,7 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
     target_user_id: Optional[int] = None
     
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
     

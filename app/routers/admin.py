@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os
@@ -56,20 +56,26 @@ def assign_request(
 # ------------------------
 @router.get("/requests")
 def list_requests(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(25, ge=1, le=200, description="Page size"),
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin)
 ):
-    # Join with Status, Category, and User to get all needed info
-    requests = (
+    skip = (page - 1) * limit
+
+    base_query = (
         db.query(Request, Status, Category, User)
         .join(Status, Request.StatusId == Status.Id, isouter=True)
         .join(Category, Request.CategoryId == Category.Id, isouter=True)
         .join(User, Request.UserId == User.UserID, isouter=True)
-        .all()
+        .order_by(Request.CreatedAt.desc())
     )
 
+    paged_requests = base_query.offset(skip).limit(limit).all()
+    total_requests = db.query(Request).count()
+
     results = []
-    for req, status, category, user in requests:
+    for req, status, category, user in paged_requests:
         results.append({
             "id": req.Id,
             "number": req.RequestNumber,
@@ -80,10 +86,19 @@ def list_requests(
             "type_name_ar": category.Name_Ar if category else None,
             "user_email": user.Email if user else None,
             "subject": req.Subject,
-            "body": req.Body
+            "body": req.Body,
+            "AssignedRoleId": req.AssignedRoleId
         })
 
-    return success_response("Requests fetched", {"requests": results})
+    payload = {
+        "page": page,
+        "limit": limit,
+        "count": len(results),
+        "total": total_requests,
+        "requests": results
+    }
+
+    return success_response("Requests fetched", payload)
 
 
 

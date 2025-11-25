@@ -15,6 +15,7 @@ from app.utils.response import success_response, error_response
 import re
 from typing import Optional
 from urllib.parse import quote
+from app.utils.paths import normalize_static_subpath
 
 
 
@@ -22,16 +23,13 @@ router = APIRouter(prefix="/search", tags=["Global Search"])
 
 
 def build_image_url(request: Request, image_path: Optional[str]) -> Optional[str]:
-    if not image_path:
+    relative_path = normalize_static_subpath(image_path) if image_path else ""
+    if not relative_path:
         return None
-    
-        # Remove '/app' if it exists at the start of the path
-    if image_path.startswith("app"):
-        image_path = image_path[3:]  # remove first 4 characters
-        
-    print(image_path)
+
     base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}/{quote(image_path)}"
+    encoded = quote(relative_path, safe="/")
+    return f"{base_url}/static/{encoded}"
 
 # Dependency to get the database session
 def get_db():

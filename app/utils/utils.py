@@ -66,3 +66,12 @@ def clean_text(value: str) -> str:
     for bad in bad_chars:
         cleaned = cleaned.replace(bad, "")
     return cleaned
+
+
+def extract_email_domain(email: str) -> Optional[str]:
+    """
+    Return the lower-cased domain part of an email address.
+    """
+    if not email or "@" not in email:
+        return None
+    return email.split("@", 1)[1].strip().lower()
