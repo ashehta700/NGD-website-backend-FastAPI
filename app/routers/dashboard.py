@@ -535,7 +535,7 @@ def users_filter(
     total_requests = sum(r.total_requests for r in data_per_country)
     total_downloads = sum(r.total_download for r in data_per_country)
     total_countries = len(data_per_country)
-    total_users = sum(r.register_user for r in data_per_country)
+    total_users = db.query(func.count(User.UserID)).scalar()
 
     # -----------------------------
     # 5️⃣ DATA PER MONTH
