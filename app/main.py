@@ -74,7 +74,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     # Customize error code as string of status code
-    content = error_response(message=exc.detail, error_code=str(exc.status_code))
+    content = error_response(message_en=exc.detail, message_ar=exc.detail, error_code=str(exc.status_code))
     return JSONResponse(status_code=exc.status_code, content=content)
 
 # Optional: catch validation errors (422) for uniform error response

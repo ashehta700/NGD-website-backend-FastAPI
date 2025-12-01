@@ -33,25 +33,40 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
 # Assign role to request
 # ------------------------
 @router.post("/assign_request")
-def assign_request(
-    request_id: int,
+def assign_requests(
+    request_ids: list[int],  # List of request IDs to assign
     role_id: int,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin)
 ):
-    req = db.query(Request).filter(Request.Id == request_id).first()
-    if not req:
+    if not request_ids:
         return error_response(
-            message_en="Request not found",
-            message_ar="الطلب غير موجود",
-            error_code="REQUEST_NOT_FOUND"
+            message_en="No request IDs provided",
+            message_ar="لم يتم تقديم أي طلبات",
+            error_code="NO_REQUESTS_PROVIDED"
         )
-    req.AssignedRoleId = role_id
+
+    assigned_requests = []
+    failed_requests = []
+
+    for req_id in request_ids:
+        req = db.query(Request).filter(Request.Id == req_id).first()
+        if req:
+            req.AssignedRoleId = role_id
+            assigned_requests.append(req_id)
+        else:
+            failed_requests.append(req_id)
+
     db.commit()
+
     return success_response(
-        message_en="Request assigned successfully",
-        message_ar="تم تعيين الطلب بنجاح",
-        data={"request_id": req.Id}
+        message_en="Requests assigned successfully",
+        message_ar="تم تعيين الطلبات بنجاح",
+        data={
+            "assigned_requests": assigned_requests,
+            "failed_requests": failed_requests,
+            "role_id": role_id
+        }
     )
 
 # ------------------------

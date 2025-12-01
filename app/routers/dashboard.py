@@ -1,7 +1,7 @@
 # app/routers/dashboard.py
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func,and_, extract ,literal_column ,text , distinct
+from sqlalchemy import func,and_, extract ,literal_column ,text , distinct ,or_
 from datetime import datetime
 from typing import Optional, List
 from app.database import get_db
@@ -429,47 +429,38 @@ def users_filter(
     db: Session = Depends(get_db)
 ):
     """
-    Filters download requests and generates dashboard data.
-    Returns:
-    - Total users, requests, downloads, countries
-    - Data per country (registered users + filtered requests/downloads)
-    - Data per month (filtered)
-    - Downloads per org type and per dataset
+    Filters registered users and download requests, returns:
+    - total users, total request users, total requests, total downloads
+    - data per country (only countries with requests for filtered datasets)
+    - data per month
+    - downloads per org type and dataset
     """
 
     # -----------------------------
-    # 1️⃣ BUILD FILTERS (YEAR-MONTH)
+    # 1️⃣ APPLY FILTERS
     # -----------------------------
-    filters = []
-    year_month_expr = extract("year", DownloadRequest.Date) * 100 + extract("month", DownloadRequest.Date)
+    filters_users = []
+    filters_requests = []
 
     if start_date:
-        try:
-            s = datetime.strptime(start_date, "%Y-%m")
-            filters.append(year_month_expr >= s.year * 100 + s.month)
-        except ValueError:
-            return {"error": "start_date must be in YYYY-MM format"}
-
+        s = datetime.strptime(start_date, "%Y-%m")
+        filters_users.append(User.CreatedAt >= s)
+        filters_requests.append(DownloadRequest.Date >= s)
     if end_date:
-        try:
-            e = datetime.strptime(end_date, "%Y-%m")
-            filters.append(year_month_expr <= e.year * 100 + e.month)
-        except ValueError:
-            return {"error": "end_date must be in YYYY-MM format"}
-
+        e = datetime.strptime(end_date, "%Y-%m")
+        filters_users.append(User.CreatedAt <= e)
+        filters_requests.append(DownloadRequest.Date <= e)
     if country:
-        filters.append(DownloadRequest.Country == country)
-
+        filters_users.append(User.country.has(Country.CountryCode == country))
+        filters_requests.append(DownloadRequest.Country == country)
     if orgtype:
-        filters.append(DownloadRequest.OrgType.in_(orgtype))
-
-    if dataset_name:
-        filters.append(DownloadItem.DatasetName.in_(dataset_name))
+        filters_users.append(User.organization_type.has(OrganizationType.NameEn.in_(orgtype)))
+        filters_requests.append(DownloadRequest.OrgType.in_(orgtype))
 
     # -----------------------------
-    # 2️⃣ MAIN FILTERED QUERY
+    # 2️⃣ FILTERED DOWNLOAD REQUESTS
     # -----------------------------
-    base_query = (
+    request_query = (
         db.query(
             DownloadRequest.ReqNo,
             DownloadRequest.UserID,
@@ -479,122 +470,175 @@ def users_filter(
             DownloadItem.DatasetName
         )
         .join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
-        .filter(*filters)
+        .filter(*filters_requests)
     )
-    FR = base_query.subquery()
+
+    if dataset_name:
+        request_query = request_query.filter(DownloadItem.DatasetName.in_(dataset_name))
+
+    request_subq = request_query.subquery()
 
     # -----------------------------
-    # 3️⃣ DATA PER COUNTRY
+    # 3️⃣ REGISTERED USERS BASED ON FILTERS
     # -----------------------------
-    # Filtered requests grouped by country
+    # If dataset filter exists, only consider users who requested these datasets
+    if dataset_name:
+        filtered_users_query = db.query(User).filter(
+            User.UserID.in_(db.query(request_subq.c.UserID).distinct()),
+            *filters_users
+        )
+    else:
+        filtered_users_query = db.query(User).filter(*filters_users)
+
+    filtered_users_subq = filtered_users_query.subquery()
+
+    # -----------------------------
+    # 4️⃣ TOTALS
+    # -----------------------------
+    total_users = filtered_users_query.count()
+    total_request_users = db.query(func.count(distinct(request_subq.c.UserID))).scalar() or 0
+    total_requests = db.query(func.count(distinct(request_subq.c.ReqNo))).scalar() or 0
+    total_downloads = db.query(func.count(request_subq.c.DatasetName)).scalar() or 0
+
+    # -----------------------------
+    # 5️⃣ DATA PER COUNTRY
+    # -----------------------------
     requests_per_country = (
         db.query(
-            FR.c.Country.label("CountryCode"),
-            func.count(distinct(FR.c.UserID)).label("request_user"),
-            func.count(distinct(FR.c.ReqNo)).label("total_requests"),
-            func.count(FR.c.DatasetName).label("total_download")
+            request_subq.c.Country.label("CountryCode"),
+            func.count(distinct(request_subq.c.UserID)).label("request_user"),
+            func.count(distinct(request_subq.c.ReqNo)).label("total_requests"),
+            func.count(request_subq.c.DatasetName).label("total_download")
         )
-        .group_by(FR.c.Country)
-    ).subquery()
+        .group_by(request_subq.c.Country)
+        .subquery()
+    )
 
-    # Total registered users per country (all users)
     registered_users_per_country = (
         db.query(
-            User.CountryID.label("CountryID"),
-            func.count(User.UserID).label("register_user")
+            filtered_users_subq.c.CountryID.label("CountryID"),
+            func.count(filtered_users_subq.c.UserID).label("register_user")
         )
-        .group_by(User.CountryID)
-    ).subquery()
+        .group_by(filtered_users_subq.c.CountryID)
+        .subquery()
+    )
 
-    # Join countries with filtered requests and registered users
     data_per_country = (
         db.query(
             Country.CountryCode,
             Country.CountryName,
             func.coalesce(registered_users_per_country.c.register_user, 0).label("register_user"),
-            requests_per_country.c.request_user,
-            requests_per_country.c.total_requests,
-            requests_per_country.c.total_download
-        )
-        .join(
-            requests_per_country,
-            requests_per_country.c.CountryCode == Country.CountryCode
+            func.coalesce(requests_per_country.c.request_user, 0).label("request_user"),
+            func.coalesce(requests_per_country.c.total_requests, 0).label("total_requests"),
+            func.coalesce(requests_per_country.c.total_download, 0).label("total_download")
         )
         .outerjoin(
             registered_users_per_country,
             registered_users_per_country.c.CountryID == Country.OBJECTID
         )
+        .join(
+            requests_per_country,
+            requests_per_country.c.CountryCode == Country.CountryCode
+        )  # Only countries with requests after dataset filter
         .order_by(Country.CountryName)
         .all()
     )
 
     # -----------------------------
-    # 4️⃣ TOTALS (based on filtered countries)
+    # 6️⃣ DATA PER MONTH
     # -----------------------------
-    total_filtered_users = sum(r.request_user for r in data_per_country)
-    total_requests = sum(r.total_requests for r in data_per_country)
-    total_downloads = sum(r.total_download for r in data_per_country)
-    total_countries = len(data_per_country)
-    total_users = db.query(func.count(User.UserID)).scalar()
-
-    # -----------------------------
-    # 5️⃣ DATA PER MONTH
-    # -----------------------------
-    year_expr = extract("year", FR.c.Date).label("year")
-    month_expr = extract("month", FR.c.Date).label("month")
-
-    data_per_month = (
+    requests_per_month = (
         db.query(
-            year_expr,
-            month_expr,
-            func.count(distinct(FR.c.ReqNo)).label("requests"),
-            func.count(distinct(FR.c.UserID)).label("users"),
-            func.count(FR.c.DatasetName).label("downloads")
+            extract("year", request_subq.c.Date).label("year"),
+            extract("month", request_subq.c.Date).label("month"),
+            func.count(distinct(request_subq.c.ReqNo)).label("requests"),
+            func.count(distinct(request_subq.c.UserID)).label("request_users"),
+            func.count(request_subq.c.DatasetName).label("downloads")
         )
-        .group_by(year_expr, month_expr)
-        .order_by(year_expr, month_expr)
+        .group_by(
+            extract("year", request_subq.c.Date),
+            extract("month", request_subq.c.Date)
+        )
+        .order_by(
+            extract("year", request_subq.c.Date),
+            extract("month", request_subq.c.Date)
+        )
         .all()
     )
 
+    users_per_month = (
+        db.query(
+            extract("year", filtered_users_subq.c.CreatedAt).label("year"),
+            extract("month", filtered_users_subq.c.CreatedAt).label("month"),
+            func.count(filtered_users_subq.c.UserID).label("register_users")
+        )
+        .group_by(
+            extract("year", filtered_users_subq.c.CreatedAt),
+            extract("month", filtered_users_subq.c.CreatedAt)
+        )
+        .order_by(
+            extract("year", filtered_users_subq.c.CreatedAt),
+            extract("month", filtered_users_subq.c.CreatedAt)
+        )
+        .all()
+    )
+
+    month_data = {}
+    for r in requests_per_month:
+        key = f"{int(r.year)}-{int(r.month):02d}"
+        month_data[key] = {
+            "month": key,
+            "requests": r.requests,
+            "request_users": r.request_users,
+            "downloads": r.downloads,
+            "register_users": 0
+        }
+    for u in users_per_month:
+        key = f"{int(u.year)}-{int(u.month):02d}"
+        if key not in month_data:
+            month_data[key] = {
+                "month": key,
+                "requests": 0,
+                "request_users": 0,
+                "downloads": 0,
+                "register_users": u.register_users
+            }
+        else:
+            month_data[key]["register_users"] = u.register_users
+
     # -----------------------------
-    # 6️⃣ DOWNLOADS PER ORGTYPE
+    # 7️⃣ DOWNLOADS PER ORG TYPE
     # -----------------------------
     downloads_per_orgtype = (
         db.query(
-            FR.c.OrgType,
-            func.count(distinct(FR.c.ReqNo)).label("count")
+            request_subq.c.OrgType,
+            func.count(distinct(request_subq.c.ReqNo)).label("count")
         )
-        .group_by(FR.c.OrgType)
+        .group_by(request_subq.c.OrgType)
         .all()
     )
 
     # -----------------------------
-    # 7️⃣ DOWNLOADS PER DATASET
+    # 8️⃣ DOWNLOADS PER DATASET
     # -----------------------------
     downloads_per_dataset = (
         db.query(
-            FR.c.DatasetName,
-            func.count(FR.c.DatasetName).label("count")
+            request_subq.c.DatasetName,
+            func.count(request_subq.c.DatasetName).label("count")
         )
-        .group_by(FR.c.DatasetName)
+        .group_by(request_subq.c.DatasetName)
         .all()
     )
-
-    # -----------------------------
-    # 8️⃣ HELPER
-    # -----------------------------
-    def ym(y, m):
-        return f"{int(y)}-{int(m):02d}"
 
     # -----------------------------
     # 9️⃣ FINAL RESPONSE
     # -----------------------------
     response = {
         "total_users": total_users,
-        "total_request_users": total_filtered_users,
-        "total_countries": total_countries,
+        "total_request_users": total_request_users,
         "total_requests": total_requests,
         "total_downloads": total_downloads,
+        "total_countries": len(data_per_country),
         "data_per_country": [
             {
                 "CountryCode": r.CountryCode,
@@ -606,15 +650,7 @@ def users_filter(
             }
             for r in data_per_country
         ],
-        "data_per_month": [
-            {
-                "month": ym(r.year, r.month),
-                "requests": r.requests,
-                "users": r.users,
-                "downloads": r.downloads
-            }
-            for r in data_per_month
-        ],
+        "data_per_month": list(month_data.values()),
         "downloads_per_orgtype": [
             {"orgtype": r.OrgType, "count": r.count} for r in downloads_per_orgtype
         ],
@@ -623,4 +659,4 @@ def users_filter(
         ]
     }
 
-    return success_response("Filtered user downloads successfully", data = response)
+    return success_response("Filtered user downloads successfully", data=response)  

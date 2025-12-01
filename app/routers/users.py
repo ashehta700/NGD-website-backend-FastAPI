@@ -438,7 +438,7 @@ def refuse_user(
 
     user.IsApproved = False
     user.IsActive = False
-    user.IsDeleted = True
+    # user.IsDeleted = True
     user.UpdatedAt = datetime.utcnow()
     user.UpdatedByUserID = current.UserID
 
