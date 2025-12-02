@@ -34,8 +34,16 @@ def get_visitor_filter_options(db: Session = Depends(get_db)):
             func.count(Visitor.VisitorID).label("count")
         )
         .join(Country, Visitor.CountryID == Country.OBJECTID)
-        .group_by(Country.CountryCode, Country.CountryName,Country.OBJECTID)
-        .order_by(Country.CountryName)
+        .group_by(
+            Country.CountryCode,
+            Country.OBJECTID,
+            Country.CountryName,
+            Country.CountryNameAr,   # 🔥 FIXED: MUST BE GROUPED
+        )
+        .order_by(
+            Country.CountryName,
+            Country.CountryNameAr
+        )
         .all()
     )
 
@@ -52,7 +60,10 @@ def get_visitor_filter_options(db: Session = Depends(get_db)):
         ]
     }
 
-    return success_response("Visitor filter options retrieved successfully" , data=data)
+    return success_response(
+        "Visitor filter options retrieved successfully",
+        data=data
+    )
 
 
 
@@ -89,7 +100,7 @@ def visitors_summary(db: Session = Depends(get_db)):
             func.count(Visitor.VisitorID).label("count"),
         )
         .join(Country, Visitor.CountryID == Country.OBJECTID)
-        .group_by(Country.CountryCode, Country.CountryName)
+        .group_by(Country.CountryCode, Country.CountryName,Country.CountryNameAr)
         .order_by(func.count(Visitor.VisitorID).desc())
         .all()
     )
@@ -160,7 +171,7 @@ def visitors_filter(
         )
         .join(Country, Visitor.CountryID == Country.OBJECTID)
         .filter(*filters)
-        .group_by(Country.CountryCode, Country.CountryName)
+        .group_by(Country.CountryCode, Country.CountryName,Country.CountryNameAr)
         .order_by(func.count(Visitor.VisitorID).desc())
     )
     per_country = per_country_query.all()
@@ -230,8 +241,8 @@ def get_user_filter_options(db: Session = Depends(get_db)):
             func.count(DownloadRequest.ReqNo).label("count")
         )
         .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
-        .group_by(DownloadRequest.Country, Country.CountryName,Country.OBJECTID)
-        .order_by(Country.CountryName)
+        .group_by(DownloadRequest.Country, Country.CountryName,Country.OBJECTID,Country.CountryNameAr)
+        .order_by(Country.CountryName,Country.CountryNameAr)
         .all()
     )
 
@@ -300,7 +311,6 @@ def users_summary(db: Session = Depends(get_db)):
         .order_by(user_year_expr, user_month_expr)
         .all()
     )
-    print(users_per_month)
 
     # ----------------------------------------
     # Requests per country
@@ -313,7 +323,7 @@ def users_summary(db: Session = Depends(get_db)):
             func.count(DownloadRequest.ReqNo).label("count")
         )
         .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
-        .group_by(DownloadRequest.Country, Country.CountryName)
+        .group_by(DownloadRequest.Country, Country.CountryName,Country.CountryNameAr)
         .all()
     )
 
@@ -329,7 +339,7 @@ def users_summary(db: Session = Depends(get_db)):
         )
         .join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
         .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
-        .group_by(DownloadRequest.Country, Country.CountryName)
+        .group_by(DownloadRequest.Country, Country.CountryName,Country.CountryNameAr)
         .all()
     )
 
