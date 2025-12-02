@@ -130,6 +130,7 @@ def get_request_details(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin)
 ):
+    # Fetch the main request
     req = db.query(Request).filter(Request.Id == request_id).first()
     if not req:
         return error_response(
@@ -138,6 +139,7 @@ def get_request_details(
             error_code="REQUEST_NOT_FOUND"
         )
 
+    # Fetch related objects
     user = db.query(User).filter(User.UserID == req.UserId).first() if req.UserId else None
     category = db.query(Category).filter(Category.Id == req.CategoryId).first() if req.CategoryId else None
     status = db.query(Status).filter(Status.Id == req.StatusId).first() if req.StatusId else None
@@ -152,14 +154,17 @@ def get_request_details(
         .filter(Request_RequestInformation.c.RequestId == req.Id)
         .all()
     )
+
     formats = (
         db.query(Format)
         .join(Request_Format, Request_Format.c.FormatId == Format.Id)
         .filter(Request_Format.c.RequestId == req.Id)
         .all()
     )
+
     replies = db.query(Reply).filter(Reply.RequestId == req.Id, Reply.IsDeleted == False).all()
 
+    # RequestData details (if applicable)
     request_data_details = {}
     if category and category.Id == 8:  # RequestData
         from app.models.requests import RequestData
@@ -180,6 +185,28 @@ def get_request_details(
                 "created_at": rd.CreatedAt,
             }
 
+    # Build replies with responder info
+    replies_data = []
+    for reply in replies:
+        responder = db.query(User).filter(User.UserID == reply.ResponderUserId).first() if reply.ResponderUserId else None
+        replies_data.append({
+            "id": reply.Id,
+            "subject": reply.Subject,
+            "body": reply.Body,
+            "attachment_path": reply.AttachmentPath,
+            "created_at": reply.CreatedAt,
+            "created_by": reply.CreatedByUserID,
+            "responder_user_id": reply.ResponderUserId,
+            "responder": {
+                "UserID": responder.UserID if responder else None,
+                "FirstName": responder.FirstName if responder else None,
+                "LastName": responder.LastName if responder else None,
+                "Email": responder.Email if responder else None,
+                "RoleID": responder.RoleID if responder else None
+            }
+        })
+
+    # Build full request details
     details = {
         "id": req.Id,
         "number": req.RequestNumber,
@@ -197,18 +224,7 @@ def get_request_details(
         "updated_by": req.UpdatedByUserID,
         "request_information": [{"Name_Ar": ri.Name_Ar, "name": ri.Name} for ri in request_info] if request_info else [],
         "formats": [{"name": f.Name} for f in formats] if formats else [],
-        "replies": [
-            {
-                "id": reply.Id,
-                "subject": reply.Subject,
-                "body": reply.Body,
-                "attachment_path": reply.AttachmentPath,
-                "created_at": reply.CreatedAt,
-                "created_by": reply.CreatedByUserID,
-                "responder_user_id": reply.ResponderUserId,
-            }
-            for reply in replies
-        ] if replies else [],
+        "replies": replies_data,
         **request_data_details
     }
 

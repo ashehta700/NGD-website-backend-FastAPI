@@ -63,6 +63,7 @@ class Country(Base):
     OBJECTID = Column(Integer, primary_key=True, index=True)
     CountryCode = Column(String)
     CountryName = Column(String)
+    CountryNameAr = Column(Unicode(200))
     Latitude = Column(Float)
     Longitude = Column(Float)
     Geom = Column(String) 

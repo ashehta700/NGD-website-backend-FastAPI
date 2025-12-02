@@ -44,7 +44,8 @@ def get_registration_lookups(db: Session = Depends(get_db)):
         Countries = db.query(
             Country.OBJECTID.label("id"),
             Country.CountryCode.label("code"),
-            Country.CountryName.label("name")
+            Country.CountryName.label("name"),
+            Country.CountryNameAr.label("name_ar")
         ).all()
         Cities = db.query(City).all()
 
@@ -57,7 +58,7 @@ def get_registration_lookups(db: Session = Depends(get_db)):
         titles =  [{"id": title.Id, "title": title.Title} for title in UserTitles]
         organizations =  [{"id": org.OrganizationTypeID, "NameEn": org.NameEn,"NameAr":org.NameAr} for org in OrganizationTypes]
         # Access labeled columns by attribute name
-        countries = [{"id": country.id, "NameEn": country.name, "CountryCode": country.code} for country in Countries]
+        countries = [{"id": country.id, "NameEn": country.name, "NameAr": country.name_ar, "CountryCode": country.code} for country in Countries]
         cities = [{"id": city.CityID, "NameEn": city.NameEn,"NameAr":city.NameAr} for city in Cities]
         # departments = [{"id": 1, "name": "IT"}, {"id": 2, "name": "HR"}]
 

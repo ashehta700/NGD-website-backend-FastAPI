@@ -164,7 +164,7 @@ def get_role_details(role_id: int, db: Session = Depends(get_db)):
         "NameEn": role.NameEn,
         "NameAr": role.NameAr,
         "Features": [
-            {"AppFeatureID": f.AppFeatureID, "NameEn": f.NameEn, "Link": f.Link}
+            {"AppFeatureID": f.AppFeatureID, "NameEn": f.NameEn, "NameAr": f.NameAr, "Link": f.Link}
             for f in role.features
         ]
     }

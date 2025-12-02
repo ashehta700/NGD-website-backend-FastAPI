@@ -27,6 +27,7 @@ from app.utils.utils import get_current_user, extract_email_domain
 from app.auth.tokens import create_verification_token
 from app.utils.email import send_email, send_domain_refused_email
 from app.utils.paths import static_path
+from app.models.dashboard import DownloadRequest, DownloadItem, BibliographyDownloadRequest
 
 load_dotenv()
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "")
@@ -43,7 +44,7 @@ def _photo_url(request: Request, photo_path: Optional[str]) -> Optional[str]:
     return f"{base_url}/{photo_path.lstrip('/')}"
 
 
-def _serialize_user(user: User, request: Request) -> dict:
+def _serialize_user(user: User, request: Request ,download_items=None) -> dict:
     data = {
         "UserID": user.UserID,
         "TitleId": user.TitleId,
@@ -67,6 +68,22 @@ def _serialize_user(user: User, request: Request) -> dict:
         "EmailVerified": user.EmailVerified,
         "CreatedAt": user.CreatedAt,
         "UpdatedAt": user.UpdatedAt,
+        # Add this block
+        "Downloads": [
+            {
+                "ID": item.ID,
+                "ReqNo": item.ReqNo,
+                "DatasetName": item.DatasetName,
+                "DatasetURL": item.DatasetURL,
+                "GridCode": item.GridCode,
+                "EnglishName": item.EnglishName,
+                "ArabicName": item.ArabicName,
+                "AreaType": item.AreaType,
+                "Cost": item.Cost,
+                "FileName": item.FileName,
+            }
+            for item in (download_items or [])
+        ]
     }
     return data
 
@@ -203,7 +220,19 @@ def get_me(request: Request, current=Depends(get_current_user), db: Session = De
     if not user:
         return error_response("User not found", "هذا المستخدم غير موجود" , "USER_NOT_FOUND")
 
-    return success_response("Profile retrieved successfully",data= _serialize_user(user, request))
+        # -------------------------
+    # 1️⃣ Get DOWNLOAD_ITEMS
+    # -------------------------
+    download_items = (
+        db.query(DownloadItem)
+        .join(DownloadRequest, DownloadItem.ReqNo == DownloadRequest.ReqNo)
+        .filter(DownloadRequest.UserID == user.UserID)
+        .all()
+    )    
+
+    print(download_items)
+
+    return success_response("Profile retrieved successfully", data=_serialize_user(user, request, download_items))
 
 
 

@@ -30,6 +30,7 @@ def get_visitor_filter_options(db: Session = Depends(get_db)):
             Country.CountryCode.label("country_code"),
             Country.OBJECTID.label("country_id"),
             Country.CountryName.label("country_name"),
+            Country.CountryNameAr.label("country_name_ar"),
             func.count(Visitor.VisitorID).label("count")
         )
         .join(Country, Visitor.CountryID == Country.OBJECTID)
@@ -44,6 +45,7 @@ def get_visitor_filter_options(db: Session = Depends(get_db)):
                 "CountryCode": c.country_code,
                 "Country_id": c.country_id,
                 "CountryName": c.country_name,
+                "CountryNameAr": c.country_name_ar,
                 "VisitorCount": c.count
             }
             for c in countries
@@ -83,6 +85,7 @@ def visitors_summary(db: Session = Depends(get_db)):
         db.query(
             Country.CountryCode.label("country_code"),
             Country.CountryName.label("country_name"),
+            Country.CountryNameAr.label("country_name_ar"),
             func.count(Visitor.VisitorID).label("count"),
         )
         .join(Country, Visitor.CountryID == Country.OBJECTID)
@@ -103,6 +106,7 @@ def visitors_summary(db: Session = Depends(get_db)):
             {
                 "country_code": r.country_code,
                 "country_name": r.country_name,
+                "country_name_ar": r.country_name_ar,
                 "count": r.count,
             }
             for r in per_country
@@ -151,6 +155,7 @@ def visitors_filter(
         db.query(
             Country.CountryCode.label("country_code"),
             Country.CountryName.label("country_name"),
+            Country.CountryNameAr.label("country_name_ar"),
             func.count(Visitor.VisitorID).label("count")
         )
         .join(Country, Visitor.CountryID == Country.OBJECTID)
@@ -184,7 +189,7 @@ def visitors_filter(
     data = {
         "total": total_visitors,
         "countries": [
-            {"country_code": r.country_code, "country_name": r.country_name, "count": r.count}
+            {"country_code": r.country_code, "country_name": r.country_name, "country_name_ar": r.country_name_ar, "count": r.count}
             for r in per_country
         ],
         "time_series": formatted_series
@@ -221,6 +226,7 @@ def get_user_filter_options(db: Session = Depends(get_db)):
             DownloadRequest.Country.label("country_code"),
             Country.OBJECTID.label("country_id"),
             Country.CountryName.label("country_name"),
+            Country.CountryNameAr.label("country_name_ar"),
             func.count(DownloadRequest.ReqNo).label("count")
         )
         .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
@@ -255,6 +261,7 @@ def get_user_filter_options(db: Session = Depends(get_db)):
                 "CountryCode": c.country_code,
                 "Country_id": c.country_id,
                 "CountryName": c.country_name,
+                "CountryNameAr": c.country_name_ar,
                 "RequestCount": c.count
             }
             for c in countries
@@ -302,6 +309,7 @@ def users_summary(db: Session = Depends(get_db)):
         db.query(
             DownloadRequest.Country.label("country_code"),
             Country.CountryName.label("country_name"),
+            Country.CountryNameAr.label("country_name_ar"),
             func.count(DownloadRequest.ReqNo).label("count")
         )
         .outerjoin(Country, Country.CountryCode == DownloadRequest.Country)
@@ -316,6 +324,7 @@ def users_summary(db: Session = Depends(get_db)):
         db.query(
             DownloadRequest.Country.label("country_code"),
             Country.CountryName.label("country_name"),
+            Country.CountryNameAr.label("country_name_ar"),
             func.count(DownloadItem.ID).label("count")
         )
         .join(DownloadItem, DownloadItem.ReqNo == DownloadRequest.ReqNo)
@@ -391,11 +400,11 @@ def users_summary(db: Session = Depends(get_db)):
         ],
 
         "requests_per_country": [
-            {"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count}
+            {"CountryCode": r.country_code, "CountryName": r.country_name, "CountryNameAr": r.country_name_ar, "count": r.count}
             for r in requests_per_country
         ],
         "downloads_per_country": [
-            {"CountryCode": r.country_code, "CountryName": r.country_name, "count": r.count}
+            {"CountryCode": r.country_code, "CountryName": r.country_name, "CountryNameAr": r.country_name_ar, "count": r.count}
             for r in downloads_per_country
         ],
         "requests_per_month": [
@@ -527,6 +536,7 @@ def users_filter(
         db.query(
             Country.CountryCode,
             Country.CountryName,
+            Country.CountryNameAr,
             func.coalesce(registered_users_per_country.c.register_user, 0).label("register_user"),
             func.coalesce(requests_per_country.c.request_user, 0).label("request_user"),
             func.coalesce(requests_per_country.c.total_requests, 0).label("total_requests"),
@@ -643,6 +653,7 @@ def users_filter(
             {
                 "CountryCode": r.CountryCode,
                 "CountryName": r.CountryName,
+                "CountryNameAr": r.CountryNameAr,
                 "register_user": r.register_user,
                 "request_user": r.request_user,
                 "total_requests": r.total_requests,
