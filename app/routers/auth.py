@@ -46,6 +46,7 @@ def get_registration_lookups(db: Session = Depends(get_db)):
             Country.CountryCode.label("code"),
             Country.CountryName.label("name"),
             Country.CountryNameAr.label("name_ar")
+
         ).all()
         Cities = db.query(City).all()
 
@@ -59,7 +60,7 @@ def get_registration_lookups(db: Session = Depends(get_db)):
         organizations =  [{"id": org.OrganizationTypeID, "NameEn": org.NameEn,"NameAr":org.NameAr} for org in OrganizationTypes]
         # Access labeled columns by attribute name
         countries = [{"id": country.id, "NameEn": country.name, "NameAr": country.name_ar, "CountryCode": country.code} for country in Countries]
-        cities = [{"id": city.CityID, "NameEn": city.NameEn,"NameAr":city.NameAr} for city in Cities]
+        # cities = [{"id": city.CityID, "NameEn": city.NameEn,"NameAr":city.NameAr} for city in Cities]
         # departments = [{"id": 1, "name": "IT"}, {"id": 2, "name": "HR"}]
 
         domains = db.query(Domain).order_by(Domain.Type.asc(), Domain.Domain.asc()).all()
@@ -69,7 +70,7 @@ def get_registration_lookups(db: Session = Depends(get_db)):
             "titles": titles,
             "Organizations": organizations,
             "countries": countries,
-            "cities": cities,
+            # "cities": cities,
             "domains": [
                 {
                     "id": domain.Id,
@@ -87,7 +88,46 @@ def get_registration_lookups(db: Session = Depends(get_db)):
         return error_response(f"Error fetching lookup data: {str(e)}", "LOOKUP_ERROR")
 
 
+# make a new endpoint to return all cities related to a country
+@router.get("/lookups/cities")
+def get_cities(country_id: int = None, db: Session = Depends(get_db)):
+    """
+    Returns list of cities.
+    - If no country_id is provided → return all cities.
+    - If country_id is provided → return only cities belonging to that country.
+    """
 
+    try:
+        query = db.query(City)
+
+        # Filter if country_id provided
+        if country_id:
+            query = query.filter(City.CountryID == country_id)
+
+        cities = query.all()
+
+        cities_data = [
+            {
+                "id": city.CityID,
+                "NameEn": city.NameEn,
+                "NameAr": city.NameAr,
+                "CountryID": city.CountryID
+            }
+            for city in cities
+        ]
+
+        return success_response(
+            message_en="Cities loaded successfully",
+            message_ar="تم جلب المدن بنجاح",
+            data={"cities": cities_data}
+        )
+
+    except Exception as e:
+        return error_response(
+            message_en=f"Error fetching cities: {str(e)}",
+            message_ar="خطأ في جلب المدن",
+            error_code="CITY_LOOKUP_ERROR"
+        )
 # this is endpoint for Registering a new Account (Admin or Self Registration)
 @router.post("/register")
 def register(
