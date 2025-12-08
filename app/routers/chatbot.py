@@ -1,9 +1,10 @@
 # routers/chatbot.py
+
 from fastapi import APIRouter, Depends, Body, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.utils.response import success_response, error_response
-from app.routers.search import global_search  # reuse global search logic
+from app.routers.search import global_search
 
 router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
 
@@ -12,22 +13,21 @@ FALLBACK_MESSAGE = {
     "ar": "عذرًا، لم أجد إجابة دقيقة على سؤالك. يمكنك التواصل مع <a href='https://ngd.com/contact' target='_blank'>خدمة العملاء</a> أو الاتصال على +966-XXX-XXXX."
 }
 
+
 @router.post("/ask")
 def ask_chatbot(
     request: Request,
     user_question: str = Body(..., embed=True),
     db: Session = Depends(get_db)
 ):
-    """Chatbot endpoint that returns clean and minimal HTML response."""
+    """Chatbot endpoint that returns search results in HTML, with English and Arabic support."""
 
-    # Detect if user question is Arabic
+    # Detect if the user input is Arabic
     is_arabic = any("\u0600" <= ch <= "\u06FF" for ch in user_question)
 
-    # -------------------------
     # Run search
-    # -------------------------
     try:
-        results = global_search(db, user_question, request, skip=0, limit=3)
+        results = global_search(db, user_question, request, skip=0, limit=4)
     except Exception as e:
         return error_response(
             message_en=f"Error occurred while searching: {str(e)}",
@@ -35,9 +35,7 @@ def ask_chatbot(
             error_code="INTERNAL_ERROR"
         )
 
-    # -------------------------
     # Fallback if no results
-    # -------------------------
     if not results:
         fallback_msg = FALLBACK_MESSAGE["ar"] if is_arabic else FALLBACK_MESSAGE["en"]
         return success_response(
@@ -46,19 +44,14 @@ def ask_chatbot(
             data={"message": fallback_msg}
         )
 
-    # -------------------------
-    # Build response cards
-    # -------------------------
-    intro = (
-        "وجدت بعض النتائج التي قد تساعدك:"
-        if is_arabic else
-        "I found a few things that might help you:"
-    )
+    # Intro text
+    intro = "وجدت بعض النتائج التي قد تساعدك:" if is_arabic else "I found a few things that might help you:"
 
+    # Build HTML cards
     html_cards = []
     for r in results:
-        title = r.get("title", "")
-        description = (r.get("description") or "")[:120]
+        title = r.get("title_ar") if is_arabic else r.get("title_en")
+        description = (r.get("description_ar") if is_arabic else r.get("description_en") or "")[:120]
 
         image_html = (
             f"<img src='{r['image']}' alt='' width='50' height='50' "
@@ -77,9 +70,7 @@ def ask_chatbot(
 
     html_response = f"<p>{intro}</p>{''.join(html_cards)}"
 
-    # -------------------------
-    # Final Success Response
-    # -------------------------
+    # Return the response in the same structure as old chatbot
     return success_response(
         message_en="Chatbot search results retrieved successfully.",
         message_ar="تم جلب نتائج بحث المساعد بنجاح.",

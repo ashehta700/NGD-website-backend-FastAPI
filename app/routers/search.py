@@ -1,7 +1,9 @@
+# routers/search.py
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import or_ ,func
-from typing import Optional
+from sqlalchemy import or_, func
+from typing import Optional, List
 from urllib.parse import quote
 from app.database import SessionLocal
 from app.models.faq import FAQ
@@ -19,16 +21,9 @@ import re
 router = APIRouter(prefix="/search", tags=["Global Search"])
 
 
-def build_image_url(request: Request, image_path: Optional[str]) -> Optional[str]:
-    relative_path = normalize_static_subpath(image_path) if image_path else ""
-    if not relative_path:
-        return None
-    base_url = str(request.base_url).rstrip("/")
-    encoded = quote(relative_path, safe="/")
-    return f"{base_url}/static/{encoded}"
-
-
-# Dependency to get the database session
+# ===============================
+# DB Session
+# ===============================
 def get_db():
     db = SessionLocal()
     try:
@@ -37,213 +32,192 @@ def get_db():
         db.close()
 
 
-# --- Utility for keyword highlighting ---
-def highlight_text(text: str, keyword: str) -> str:
+# ===============================
+# Helpers
+# ===============================
+def build_image_url(request: Request, image_path: Optional[str]):
+    if not image_path:
+        return None
+    relative_path = normalize_static_subpath(image_path)
+    base_url = str(request.base_url).rstrip("/")
+    encoded = quote(relative_path, safe="/")
+    return f"{base_url}/static/{encoded}"
+
+
+def highlight_keywords(text: str, keywords: List[str]) -> str:
     if not text:
         return ""
-    escaped_keyword = re.escape(keyword)
-    pattern = re.compile(f"({escaped_keyword})", re.IGNORECASE)
-    return pattern.sub(r"<mark>\1</mark>", text)
+    for kw in keywords:
+        escaped_kw = re.escape(kw)
+        text = re.sub(rf"({escaped_kw})", r"<mark>\1</mark>", text, flags=re.IGNORECASE)
+    return text
 
 
-# --- Core search logic ---
-def global_search(db: Session, search_term: str, request: Request, skip: int = 0, limit: int = 10):
+def extract_keywords(query: str) -> List[str]:
+    cleaned = re.sub(r"[^a-zA-Z0-9\u0600-\u06FF ]+", " ", query).lower()
+    words = cleaned.split()
+    stopwords = set(["i", "need", "the", "to", "for", "من", "الى", "عن"])
+    return [w for w in words if w not in stopwords and len(w) > 2]
+
+
+def build_search_filter(columns, keywords):
+    conditions = []
+    for col in columns:
+        for kw in keywords:
+            conditions.append(col.ilike(f"%{kw}%"))
+    return or_(*conditions)
+
+
+def get_primary_key(model):
+    """Return the primary key column of any model."""
+    return list(model.__table__.primary_key.columns)[0]
+
+
+# ===============================
+# GLOBAL SEARCH
+# ===============================
+def global_search(db: Session, query: str, request: Request, skip=0, limit=10):
+
+    keywords = extract_keywords(query)
+    if not keywords:
+        keywords = [query.lower()]
+
     results = []
 
-    def add_result(model_name, category, url, title_en, title_ar, description_en, description_ar, image=None):
+    def add(model_name, category, url, en_title, ar_title, en_desc, ar_desc, image):
         results.append({
             "model": model_name,
             "category": category,
             "url": url,
-            "title_en": highlight_text(title_en or "", search_term),
-            "title_ar": highlight_text(title_ar or "", search_term),
-            "description_en": highlight_text(description_en or "", search_term),
-            "description_ar": highlight_text(description_ar or "", search_term),
+            "title_en": highlight_keywords(en_title or "", keywords),
+            "title_ar": highlight_keywords(ar_title or "", keywords),
+            "description_en": highlight_keywords(en_desc or "", keywords),
+            "description_ar": highlight_keywords(ar_desc or "", keywords),
             "image": build_image_url(request, image)
         })
 
-    # --- FAQ ---
-    faq_results = db.query(FAQ).filter(
-        FAQ.IsDelete == 0,  # <-- only active
-        or_(
-            FAQ.QuestionEn.ilike(f"%{search_term}%"),
-            FAQ.AnswerEn.ilike(f"%{search_term}%"),
-            FAQ.QuestionAr.ilike(f"%{search_term}%"),
-            FAQ.AnswerAr.ilike(f"%{search_term}%")
-        )
-    ).order_by(FAQ.FAQID).limit(limit).offset(skip).all()
-    for faq in faq_results:
-        add_result("FAQ", "FAQ", f"/faq/{faq.FAQID}", faq.QuestionEn, faq.QuestionAr, faq.AnswerEn, faq.AnswerAr)
+    # -------------------------------
+    # FAQ
+    # -------------------------------
+    faq_cols = [FAQ.QuestionEn, FAQ.AnswerEn, FAQ.QuestionAr, FAQ.AnswerAr]
+    faq_items = (
+        db.query(FAQ)
+        .filter(FAQ.IsDelete == 0, build_search_filter(faq_cols, keywords))
+        .order_by(FAQ.FAQID.desc())  # MSSQL fix
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    for i in faq_items:
+        add("FAQ", "FAQ", f"/faq/{i.FAQID}", i.QuestionEn, i.QuestionAr, i.AnswerEn, i.AnswerAr, None)
 
-    # --- DatasetInfo ---
-    dataset_results = db.query(DatasetInfo).filter(
-        DatasetInfo.IsDeleted==0,
-        or_(
-            DatasetInfo.Name.ilike(f"%{search_term}%"),
-            DatasetInfo.Title.ilike(f"%{search_term}%"),
-            DatasetInfo.NameAr.ilike(f"%{search_term}%"),
-            DatasetInfo.TitleAr.ilike(f"%{search_term}%"),
-            DatasetInfo.description.ilike(f"%{search_term}%"),
-            DatasetInfo.descriptionAr.ilike(f"%{search_term}%"),
-            DatasetInfo.Keywords.ilike(f"%{search_term}%")
-        )
-    ).order_by(DatasetInfo.DatasetID).limit(limit).offset(skip).all()
-    for dataset in dataset_results:
-        add_result("DatasetInfo", "Metadata", f"/datasets/{dataset.DatasetID}",
-                   dataset.Name, dataset.NameAr, dataset.description, dataset.descriptionAr,
-                   image=getattr(dataset, "img", None))
+    # -------------------------------
+    # DatasetInfo
+    # -------------------------------
+    dataset_cols = [
+        DatasetInfo.Name, DatasetInfo.Title,
+        DatasetInfo.NameAr, DatasetInfo.TitleAr,
+        DatasetInfo.description, DatasetInfo.descriptionAr,
+        DatasetInfo.Keywords
+    ]
+    dataset_items = (
+        db.query(DatasetInfo)
+        .filter(DatasetInfo.IsDeleted == 0, build_search_filter(dataset_cols, keywords))
+        .order_by(DatasetInfo.DatasetID.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    for d in dataset_items:
+        add("DatasetInfo", "Metadata", f"/datasets/{d.DatasetID}", d.Name, d.NameAr, d.description, d.descriptionAr, d.img)
 
-    # --- MetadataInfo ---
-    metadata_results = db.query(MetadataInfo).filter(
-        MetadataInfo.IsDeleted==0,
-        or_(
-            MetadataInfo.Name.ilike(f"%{search_term}%"),
-            MetadataInfo.Title.ilike(f"%{search_term}%"),
-            MetadataInfo.NameAr.ilike(f"%{search_term}%"),
-            MetadataInfo.TitleAr.ilike(f"%{search_term}%"),
-            MetadataInfo.description.ilike(f"%{search_term}%"),
-            MetadataInfo.descriptionAr.ilike(f"%{search_term}%")
-        )
-    ).order_by(MetadataInfo.MetadataID).limit(limit).offset(skip).all()
-    for meta in metadata_results:
-        add_result("MetadataInfo", "Metadata", f"/metadata/{meta.MetadataID}",
-                   meta.Name, meta.NameAr, meta.description, meta.descriptionAr,
-                   image=getattr(meta, "ImageUrl", None))
+    # -------------------------------
+    # MetadataInfo
+    # -------------------------------
+    meta_cols = [
+        MetadataInfo.Name, MetadataInfo.Title,
+        MetadataInfo.NameAr, MetadataInfo.TitleAr,
+        MetadataInfo.description, MetadataInfo.descriptionAr
+    ]
+    meta_items = (
+        db.query(MetadataInfo)
+        .filter(MetadataInfo.IsDeleted == 0, build_search_filter(meta_cols, keywords))
+        .order_by(MetadataInfo.MetadataID.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    for m in meta_items:
+        add("MetadataInfo", "Metadata", f"/metadata/{m.MetadataID}", m.Name, m.NameAr, m.description, m.descriptionAr, None)
 
-    # --- News ---
-    news_results = db.query(News).filter(
-        News.Is_delete==0,
-        or_(
-            News.TitleEn.ilike(f"%{search_term}%"),
-            News.DescriptionEn.ilike(f"%{search_term}%"),
-            News.TitleAr.ilike(f"%{search_term}%"),
-            News.DescriptionAr.ilike(f"%{search_term}%")
+    # -------------------------------
+    # Generic search function
+    # -------------------------------
+    def search_model(model, cols, id_name, url_path, image_field, field_map=None):
+        pk = get_primary_key(model)
+        items = (
+            db.query(model)
+            .filter(func.coalesce(getattr(model, "IsDeleted", 0), 0) == 0, build_search_filter(cols, keywords))
+            .order_by(pk.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
         )
-    ).order_by(News.NewsID).limit(limit).offset(skip).all()
-    for news in news_results:
-        add_result("News", "News", f"/news/{news.NewsID}",
-                   news.TitleEn, news.TitleAr, news.DescriptionEn, news.DescriptionAr,
-                   image=getattr(news, "ImagePath", None))
+        for i in items:
+            # Map fields using field_map or fallback
+            title_en = getattr(i, field_map["title_en"], None) if field_map and "title_en" in field_map else getattr(i, "TitleEn", None) or getattr(i, "NameEn", None)
+            title_ar = getattr(i, field_map["title_ar"], None) if field_map and "title_ar" in field_map else getattr(i, "TitleAr", None) or getattr(i, "NameAr", None)
+            description_en = getattr(i, field_map["description_en"], None) if field_map and "description_en" in field_map else getattr(i, "DescriptionEn", None)
+            description_ar = getattr(i, field_map["description_ar"], None) if field_map and "description_ar" in field_map else getattr(i, "DescriptionAr", None)
+            image = getattr(i, image_field, None) if image_field else None
 
-    # --- Products ---
-    product_results = db.query(Product).filter(
-        Product.IsDeleted ==0,
-        or_(
-            Product.NameEn.ilike(f"%{search_term}%"),
-            Product.DescriptionEn.ilike(f"%{search_term}%"),
-            Product.NameAr.ilike(f"%{search_term}%"),
-            Product.DescriptionAr.ilike(f"%{search_term}%")
-        )
-    ).order_by(Product.ProductID).limit(limit).offset(skip).all()
-    for product in product_results:
-        add_result("Product", "Products", f"/products/{product.ProductID}",
-                   product.NameEn, product.NameAr, product.DescriptionEn, product.DescriptionAr,
-                   image=getattr(product, "ImagePath", None))
+            add(model.__name__, model.__name__, f"{url_path}/{getattr(i, id_name)}",
+                title_en, title_ar, description_en, description_ar, image
+            )
 
-    # --- Projects ---
-    project_results = db.query(Projects).filter(
-        func.coalesce(Projects.IsDeleted, 0) == 0,
-        or_(
-            Projects.NameEn.ilike(f"%{search_term}%"),
-            Projects.DescriptionEn.ilike(f"%{search_term}%"),
-            Projects.NameAr.ilike(f"%{search_term}%"),
-            Projects.DescriptionAr.ilike(f"%{search_term}%")
-        )
-    ).order_by(Projects.ProjectID).limit(limit).offset(skip).all()
-    for project in project_results:
-        add_result("Project", "Projects", f"/projects/{project.ProjectID}",
-                   project.NameEn, project.NameAr, project.DescriptionEn, project.DescriptionAr,
-                   image=getattr(project, "ImagePath", None))
-
-    # --- ProjectDetails ---
-    project_detail_results = db.query(ProjectDetails).filter(
-        ProjectDetails.IsDeleted == 0,
-        or_(
-            ProjectDetails.ServiceName.ilike(f"%{search_term}%"),
-            ProjectDetails.ServiceDescription.ilike(f"%{search_term}%"),
-            ProjectDetails.ServiceName.ilike(f"%{search_term}%"),
-            ProjectDetails.ServiceDescriptionAr.ilike(f"%{search_term}%")
-        )
-    ).order_by(ProjectDetails.ProjectDetailID).limit(limit).offset(skip).all()
-    for detail in project_detail_results:
-        add_result("ProjectDetail", "ProjectDetails", f"/project-details/{detail.ProjectDetailID}",
-                   detail.ServiceName, detail.ServiceName, detail.ServiceDescription, detail.ServiceDescriptionAr,
-                   image=getattr(detail, "ImageUrl", None))
-
-    # --- ManualGuide ---
-    manual_guide_results = db.query(ManualGuide).filter(
-        ManualGuide.IsDelete ==0,
-        or_(
-            ManualGuide.NameEn.ilike(f"%{search_term}%"),
-            ManualGuide.DescriptionEn.ilike(f"%{search_term}%"),
-            ManualGuide.NameAr.ilike(f"%{search_term}%"),
-            ManualGuide.DescriptionAr.ilike(f"%{search_term}%")
-        )
-    ).order_by(ManualGuide.ManualGuideID).limit(limit).offset(skip).all()
-    for guide in manual_guide_results:
-        add_result("ManualGuide", "ManualGuide", f"/manual-guides/{guide.ManualGuideID}",
-                   guide.NameEn, guide.NameAr, guide.DescriptionEn, guide.DescriptionAr,
-                   image=getattr(guide, "ImageUrl", None))
-
-    # --- Videos ---
-    video_results = db.query(Video).filter(
-        Video.IsDeleted==0,
-        or_(
-            Video.TitleEn.ilike(f"%{search_term}%"),
-            Video.DescriptionEn.ilike(f"%{search_term}%"),
-            Video.TitleAr.ilike(f"%{search_term}%"),
-            Video.DescriptionAr.ilike(f"%{search_term}%")
-        )
-    ).order_by(Video.VideoID).limit(limit).offset(skip).all()
-    for video in video_results:
-        add_result("Video", "Videos", f"/videos/{video.VideoID}",
-                   video.TitleEn, video.TitleAr, video.DescriptionEn, video.DescriptionAr,
-                   image=getattr(video, "ImagePath", None))
+    # -------------------------------
+    # Apply to all other tables
+    # -------------------------------
+    search_model(News, [News.TitleEn, News.DescriptionEn, News.TitleAr, News.DescriptionAr],
+                 "NewsID", "/news", "ImagePath")
+    search_model(Product, [Product.NameEn, Product.DescriptionEn, Product.NameAr, Product.DescriptionAr],
+                 "ProductID", "/products", "ImagePath")
+    search_model(Projects, [Projects.NameEn, Projects.DescriptionEn, Projects.NameAr, Projects.DescriptionAr],
+                 "ProjectID", "/projects", "ImagePath")
+    search_model(ProjectDetails, [ProjectDetails.ServiceName, ProjectDetails.ServiceDescription, ProjectDetails.ServiceDescriptionAr],
+                 "ProjectDetailID", "/project-details", "ImageUrl",
+                 field_map={"title_en": "ServiceName", "title_ar": "ServiceName",
+                            "description_en": "ServiceDescription", "description_ar": "ServiceDescriptionAr"})
+    search_model(ManualGuide, [ManualGuide.NameEn, ManualGuide.DescriptionEn, ManualGuide.NameAr, ManualGuide.DescriptionAr],
+                 "ManualGuideID", "/manual-guides", "ImageUrl")
+    search_model(Video, [Video.TitleEn, Video.DescriptionEn, Video.TitleAr, Video.DescriptionAr],
+                 "VideoID", "/videos", "ImagePath")
 
     return results
 
 
-# --- Global Search Endpoint with Pagination ---
+# ===============================
+# Search Endpoint
+# ===============================
 @router.get("/")
-def search(
-    request: Request,
-    query: str = Query(..., description="Search term"),
-    page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(10, ge=1, le=100, description="Items per page"),
-    db: Session = Depends(get_db)
-):
+def search(request: Request, query: str = Query(...), page: int = 1, limit: int = 10,
+           db: Session = Depends(get_db)):
     try:
-        query = query.strip()
-        if not query:
-            return error_response("Search query cannot be empty.", "EMPTY_QUERY")
+        if not query.strip():
+            return error_response("Query cannot be empty.", "الاستعلام فارغ.")
 
         skip = (page - 1) * limit
-        search_results = global_search(db, query, request, skip, limit)
+        results = global_search(db, query, request, skip, limit)
 
-        if not search_results:
-            return error_response(
-                "No results found for your query.",
-                "لم يتم العثور على نتائج للبحث الخاص بك.",
-                "NOT_FOUND"
-            )
-
-        response_data = {
-            "page": page,
-            "limit": limit,
-            "count": len(search_results),
-            "results": search_results
-        }
+        if not results:
+            return error_response("No results found.", "لا توجد نتائج.", "NOT_FOUND")
 
         return success_response(
-            "Search results retrieved successfully.",
-            "تم جلب نتائج البحث بنجاح.",
-            response_data
+            "Success",
+            "تم بنجاح",
+            {"page": page, "limit": limit, "count": len(results), "results": results}
         )
 
     except Exception as e:
-        print("Error in search:", str(e))
-        return error_response(
-            "An error occurred while processing your request.",
-            "حدث خطأ أثناء معالجة طلبك.",
-            "INTERNAL_ERROR"
-        )
+        print("ERROR:", e)
+        return error_response("Internal error", "خطأ داخلي", "INTERNAL_ERROR")
