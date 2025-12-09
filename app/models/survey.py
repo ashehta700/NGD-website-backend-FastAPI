@@ -11,6 +11,10 @@ class UsersFeedbackQuestion(Base):
     CategoryId = Column(Integer, ForeignKey("Survey.QuestionCategory.Id"))
     MainQuestion = Column(String(1000))
     MainQuestion_Ar = Column(String(1000))
+        # NEW COLUMNS
+    Question_Desc = Column(String(1000))
+    Question_Desc_Ar = Column(String(1000))
+    
     TypeOfQuestionId = Column(Integer, ForeignKey("Survey.TypeOfQuestion.Id"))
     CreatedAt = Column(DateTime)
     CreatedByUserID = Column(Integer, ForeignKey("Website.Users.UserID"))

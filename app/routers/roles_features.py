@@ -1,4 +1,4 @@
-# routers/roles_features.py
+# routers/role_features.py
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -172,4 +172,33 @@ def get_role_details(role_id: int, db: Session = Depends(get_db)):
         "Role details retrieved successfully",
         "تم جلب تفاصيل الدور بنجاح",
         data
+    )
+
+@router.put("/roles/{role_id}", dependencies=[Depends(require_admin)])
+def update_role(role_id: int, payload: RoleUpdate, db: Session = Depends(get_db)):
+    role = db.query(Role).filter(Role.RoleID == role_id).first()
+    if not role:
+        return error_response("Role not found", "الدور غير موجود")
+    for key, value in payload.dict(exclude_unset=True).items():
+        setattr(role, key, value)
+    role.UpdatedAt = datetime.utcnow()
+    db.commit()
+    db.refresh(role)
+    return success_response(
+        "Role updated successfully",
+        "تم تحديث الدور بنجاح",
+        {"RoleID": role.RoleID}
+    )
+
+@router.delete("/roles/{role_id}", dependencies=[Depends(require_admin)])
+def delete_role(role_id: int, db: Session = Depends(get_db)):
+    role = db.query(Role).filter(Role.RoleID == role_id).first()
+    if not role:
+        return error_response("Role not found", "الدور غير موجود")
+    db.delete(role)
+    db.commit()
+    return success_response(
+        "Role deleted successfully",
+        "تم حذف الدور بنجاح",
+        None
     )

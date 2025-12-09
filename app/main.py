@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
-from app.routers import roles_features,search,auth,users,visitors,projects,news,logos,faq,statistics,products,survey,manual_guide,project_details,requests,admin,videos ,contact_us ,chatbot,metadata,dashboard
+from app.routers import roles_features,search,auth,users,visitors,projects,news,logos,faq,statistics,products,survey,manual_guide,project_details,requests,admin,videos ,contact_us ,chatbot,metadata,dashboard,domains,admin_statistics
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.requests import Request
@@ -33,6 +33,7 @@ app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 API_PREFIX = "/api"
 
 app.include_router(auth.router, prefix=API_PREFIX)
+app.include_router(domains.router, prefix=API_PREFIX)
 app.include_router(search.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(roles_features.router, prefix=API_PREFIX)
@@ -53,6 +54,7 @@ app.include_router(contact_us.router, prefix=API_PREFIX)
 app.include_router(chatbot.router, prefix=API_PREFIX)
 app.include_router(metadata.router, prefix=API_PREFIX)
 app.include_router(dashboard.router, prefix=API_PREFIX)
+app.include_router(admin_statistics.router, prefix=API_PREFIX)
 
 app.add_middleware(
     CORSMiddleware,

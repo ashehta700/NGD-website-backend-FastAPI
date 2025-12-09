@@ -102,16 +102,27 @@ def get_all_products_admin(request: Request, _: User = Depends(require_admin), d
 
 
 @router.get("/{product_id}")
-def get_product(product_id: int, request: Request, _: User = Depends(require_admin), db: Session = Depends(get_db)):
-    product = db.query(Product).filter(Product.ProductID == product_id, Product.IsDeleted != True).first()
+def get_product(
+    product_id: int,
+    request: Request,
+    db: Session = Depends(get_db),   # <-- removed require_admin
+):
+    product = db.query(Product).filter(
+        Product.ProductID == product_id,
+        Product.IsDeleted != True
+    ).first()
+
     if not product:
         return error_response("Product not found", "لم يتم العثور على المنتج")
+
     data = format_product(product, request)
+
     return success_response(
         "Product retrieved successfully",
         "تم جلب المنتج بنجاح",
         data
     )
+
 
 
 @router.post("/add")

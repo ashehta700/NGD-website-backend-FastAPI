@@ -138,7 +138,6 @@ def get_vote_stats(db: Session = Depends(get_db)):
 # -------------------------------
 @router.get("/questions")
 def get_questions(db: Session = Depends(get_db)):
-    # Fetch all questions where IsDeleted is False or NULL
     questions = (
         db.query(UsersFeedbackQuestion)
         .filter(or_(UsersFeedbackQuestion.IsDeleted == False, UsersFeedbackQuestion.IsDeleted == None))
@@ -150,9 +149,9 @@ def get_questions(db: Session = Depends(get_db)):
         .all()
     )
 
-    # Group by category
     categories_dict = {}
     for q in questions:
+
         category_key = q.category.Id if q.category else "Uncategorized"
 
         if category_key not in categories_dict:
@@ -167,13 +166,14 @@ def get_questions(db: Session = Depends(get_db)):
             "Id": q.Id,
             "MainQuestion_en": clean_text(q.MainQuestion),
             "MainQuestion_ar": clean_text(q.MainQuestion_Ar),
+            "Description_en": clean_text(q.Question_Desc),
+            "Description_ar": clean_text(q.Question_Desc_Ar),
             "Type": {
                 "Id": q.type.Id if q.type else None,
                 "Type_en": q.type.TypeOfQuestion if q.type else None,
             } if q.type else None,
         }
 
-        # Only add choices if they exist
         choices = [
             {
                 "ChoiceId": c.Id,
@@ -182,15 +182,13 @@ def get_questions(db: Session = Depends(get_db)):
             }
             for c in (q.choices or []) if c.IsDeleted in [False, None]
         ]
+
         if choices:
             question_data["Choices"] = choices
 
         categories_dict[category_key]["Questions"].append(question_data)
 
-    # Convert dict → list
-    categories_list = list(categories_dict.values())
-
-    return success_response("Survey questions grouped by category", data={"categories": categories_list})
+    return success_response("Survey questions grouped by category", data={"categories": list(categories_dict.values())})
 
 
 
@@ -527,3 +525,6 @@ def export_survey_report(
         report_rows.append(row)
 
     return success_response("Export generated", "تم التصدير بنجاح",data=report_rows)
+
+
+
