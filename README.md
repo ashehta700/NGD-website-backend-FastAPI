@@ -1,4 +1,4 @@
-# FastAPI Backend — SGS Platform
+# FastAPI Backend 
 
 Production-ready FastAPI service that powers the SGS platform APIs.
 The repository ships with Docker support, GitHub Actions pipelines, and a clear
