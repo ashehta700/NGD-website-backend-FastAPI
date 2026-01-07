@@ -1,6 +1,6 @@
 # FastAPI Backend 
 
-Production-ready FastAPI service that powers the SGS platform APIs.
+Production-ready FastAPI service that powers the  platform APIs.
 The repository ships with Docker support, GitHub Actions pipelines, and a clear
 path for both local development and containerized deployment.
 
